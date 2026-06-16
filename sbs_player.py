@@ -71,7 +71,7 @@ ALL_MODELS = V2_MODELS + DA3_MODELS
 
 
 class SBSVideoPlayer:
-    def __init__(self, video_path, model_name="depth-anything/Depth-Anything-V2-Base-hf", max_shift=20, buffer_size=15, inference_size=518, precision="fp16", use_trt=True):
+    def __init__(self, video_path, model_name="depth-anything/Depth-Anything-V2-Large-hf", max_shift=20, buffer_size=15, inference_size=518, precision="fp16", use_trt=True):
         self.video_path = video_path
         self.model_name = model_name
         self.max_shift = max_shift
@@ -80,6 +80,7 @@ class SBSVideoPlayer:
         self.precision = precision
         self.use_trt = use_trt and (model_name in V2_MODELS)
         self.is_da3 = model_name in DA3_MODELS
+        self.video_fps = 30.0
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"[Info] Using device: {self.device}")
@@ -189,8 +190,10 @@ class SBSVideoPlayer:
             self.running = False
             return
 
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        print(f"[Info] Input Video FPS: {fps}")
+        self.video_fps = cap.get(cv2.CAP_PROP_FPS)
+        if self.video_fps <= 0:
+            self.video_fps = 30.0
+        print(f"[Info] Input Video FPS: {self.video_fps}")
 
         while self.running:
             if not self.play:
@@ -403,7 +406,8 @@ class SBSVideoPlayer:
                 cv2.imshow(window_name, display_frame)
 
                 elapsed = time.time() - last_frame_time
-                delay = max(1, int((1.0 / 30.0 - elapsed) * 1000))
+                target_fps = min(60.0, self.video_fps)
+                delay = max(1, int((1.0 / target_fps - elapsed) * 1000))
                 last_frame_time = time.time()
 
                 key = cv2.waitKey(delay) & 0xFF
@@ -428,7 +432,7 @@ class SBSVideoPlayer:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="2D to 3D SBS Video Player using Depth-Anything")
     parser.add_argument("video", type=str, help="Path to input 2D video file")
-    parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Base-hf",
+    parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Large-hf",
                         choices=ALL_MODELS,
                         help="Depth model to use (V2 or DA3)")
     parser.add_argument("--strength", type=int, default=20, help="Stereo shift strength (max pixels)")
