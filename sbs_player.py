@@ -71,7 +71,7 @@ ALL_MODELS = V2_MODELS + DA3_MODELS
 
 
 class SBSVideoPlayer:
-    def __init__(self, video_path, model_name="depth-anything/Depth-Anything-V2-Large-hf", max_shift=20, buffer_size=15, inference_size=518, precision="fp16", use_trt=True):
+    def __init__(self, video_path, model_name="depth-anything/Depth-Anything-V2-Large-hf", max_shift=16, buffer_size=15, inference_size=518, precision="fp16", use_trt=True):
         self.video_path = video_path
         self.model_name = model_name
         self.max_shift = max_shift
@@ -435,7 +435,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Large-hf",
                         choices=ALL_MODELS,
                         help="Depth model to use (V2 or DA3)")
-    parser.add_argument("--strength", type=int, default=20, help="Stereo shift strength (max pixels)")
+    parser.add_argument("--strength", type=int, default=16, help="Stereo shift strength (max pixels)")
     parser.add_argument("--inference-size", type=int, default=518, help="Longest side resolution for depth model input")
     parser.add_argument("--precision", type=str, default="fp16", choices=["fp32", "fp16", "int8"],
                         help="Model precision: fp16 (default), fp32, int8 (V2 only, via bitsandbytes). DA3 uses autocast for fp16.")
