@@ -136,7 +136,8 @@ class SBSVideoPlayer:
         self.play = True
         self.fullscreen = False
         self.fps_history = []
-        self.reset_temporal = False
+        self._reset_temporal_depth = False
+        self._reset_temporal_warp = False
         self.loop_video = False
         self.video_ended = False
 
@@ -188,6 +189,19 @@ class SBSVideoPlayer:
         if self.use_trt:
             self._mean = torch.tensor([0.485, 0.456, 0.406], device=self.device, dtype=torch.float16).view(1, 3, 1, 1)
             self._std = torch.tensor([0.229, 0.224, 0.225], device=self.device, dtype=torch.float16).view(1, 3, 1, 1)
+
+    @property
+    def reset_temporal(self):
+        return self._reset_temporal_depth or self._reset_temporal_warp
+
+    @reset_temporal.setter
+    def reset_temporal(self, val):
+        if val:
+            self._reset_temporal_depth = True
+            self._reset_temporal_warp = True
+        else:
+            self._reset_temporal_depth = False
+            self._reset_temporal_warp = False
 
     def load_config(self):
         config_path = os.path.expanduser("~/.config/sbs_player/config.json")
@@ -511,9 +525,9 @@ class SBSVideoPlayer:
                 time.sleep(0.001)
                 continue
 
-            if self.reset_temporal:
+            if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
-                self.reset_temporal = False
+                self._reset_temporal_depth = False
 
             frame, timestamp_ms = self.frame_queue.get()
             h, w = frame.shape[:2]
@@ -566,9 +580,9 @@ class SBSVideoPlayer:
                 time.sleep(0.001)
                 continue
 
-            if self.reset_temporal:
+            if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
-                self.reset_temporal = False
+                self._reset_temporal_depth = False
 
             frame, timestamp_ms = self.frame_queue.get()
             h, w = frame.shape[:2]
@@ -616,9 +630,9 @@ class SBSVideoPlayer:
                 time.sleep(0.001)
                 continue
 
-            if self.reset_temporal:
+            if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
-                self.reset_temporal = False
+                self._reset_temporal_depth = False
 
             frame, timestamp_ms = self.frame_queue.get()
             h, w = frame.shape[:2]
@@ -662,9 +676,10 @@ class SBSVideoPlayer:
                 time.sleep(0.001)
                 continue
 
-            if self.reset_temporal:
+            if self._reset_temporal_warp:
                 self.last_sbs_frame = None
                 self.last_timestamp_ms = None
+                self._reset_temporal_warp = False
 
             frame, normalized_depth, timestamp_ms = self.depth_queue.get()
             h, w = frame.shape[:2]
@@ -681,28 +696,29 @@ class SBSVideoPlayer:
                 if self.last_sbs_frame is not None and self.last_timestamp_ms is not None:
                     # Intermediate frame using RIFE
                     try:
-                        t_img0 = torch.from_numpy(self.last_sbs_frame).to(self.device, dtype=torch.float16) / 255.0
-                        t_img0 = t_img0.flip(-1).permute(2, 0, 1).unsqueeze(0)
-                        
-                        t_img1 = torch.from_numpy(sbs_frame).to(self.device, dtype=torch.float16) / 255.0
-                        t_img1 = t_img1.flip(-1).permute(2, 0, 1).unsqueeze(0)
-                        
-                        pad_h = self.rife_h - h
-                        pad_w = self.rife_w - w
-                        if pad_h > 0 or pad_w > 0:
-                            t_img0 = torch.nn.functional.pad(t_img0, (0, pad_w, 0, pad_h), mode='constant', value=0.0)
-                            t_img1 = torch.nn.functional.pad(t_img1, (0, pad_w, 0, pad_h), mode='constant', value=0.0)
-                            
-                        self.rife_d_img0.copy_(t_img0)
-                        self.rife_d_img1.copy_(t_img1)
-                        
+                        sbs_h, sbs_w = sbs_frame.shape[:2]
+                        pad_h = self.rife_h - sbs_h
+                        pad_w = self.rife_w - sbs_w
+
                         with torch.cuda.stream(self.rife_stream):
+                            t_img0 = torch.from_numpy(self.last_sbs_frame).to(self.device, dtype=torch.float16) / 255.0
+                            t_img0 = t_img0.flip(-1).permute(2, 0, 1).unsqueeze(0).contiguous()
+                            
+                            t_img1 = torch.from_numpy(sbs_frame).to(self.device, dtype=torch.float16) / 255.0
+                            t_img1 = t_img1.flip(-1).permute(2, 0, 1).unsqueeze(0).contiguous()
+                            
+                            if pad_h > 0 or pad_w > 0:
+                                t_img0 = torch.nn.functional.pad(t_img0, (0, pad_w, 0, pad_h), mode='constant', value=0.0)
+                                t_img1 = torch.nn.functional.pad(t_img1, (0, pad_w, 0, pad_h), mode='constant', value=0.0)
+                                
+                            self.rife_d_img0.copy_(t_img0)
+                            self.rife_d_img1.copy_(t_img1)
                             self.rife_context.execute_async_v3(stream_handle=self.rife_stream.cuda_stream)
                         self.rife_stream.synchronize()
                         
                         inter_gpu = self.rife_d_output
                         if pad_h > 0 or pad_w > 0:
-                            inter_gpu = inter_gpu[:, :, :h, :w]
+                            inter_gpu = inter_gpu[:, :, :sbs_h, :sbs_w]
                         inter_gpu = (inter_gpu.squeeze(0).permute(1, 2, 0).flip(-1) * 255.0).clamp(0, 255).to(torch.uint8).contiguous()
                         inter_frame = inter_gpu.cpu().numpy()
                     except Exception as e:
@@ -1100,6 +1116,9 @@ class SBSPlayerGUI(QMainWindow):
         self.init_ui()
         self.update_playlist_ui()
         
+        self.current_gui_frame = None
+        self.current_gui_ts = None
+        
         # Start background player threads
         self.player.start_threads()
         
@@ -1303,8 +1322,44 @@ class SBSPlayerGUI(QMainWindow):
                 self.player.play = True
                 self.play_button.setText("Pause")
 
-        if not self.player.sbs_queue.empty():
-            sbs_frame, timestamp_ms = self.player.sbs_queue.get()
+        # Sync to audio time
+        audio_time = self.player.get_audio_time()
+
+        # Keep popping frames if they are in the past to catch up (frame dropping)
+        while True:
+            # If we don't have a frame cached, get one
+            if self.current_gui_frame is None:
+                if not self.player.sbs_queue.empty():
+                    self.current_gui_frame, self.current_gui_ts = self.player.sbs_queue.get()
+                else:
+                    break # Queue empty, nothing to do
+
+            # Check if this frame is due
+            video_time = self.current_gui_ts / 1000.0
+            
+            # If there's another frame in the queue, check if that one is also in the past.
+            # If the next frame is also due (meaning we are behind), we drop the current one and get the next.
+            if video_time < audio_time - 0.015: # 15ms threshold to allow slight tolerance
+                if not self.player.sbs_queue.empty():
+                    # Drop current frame, get next one
+                    self.current_gui_frame, self.current_gui_ts = self.player.sbs_queue.get()
+                    continue
+            
+            # If the frame is in the future, we don't display it yet
+            if video_time > audio_time + 0.015:
+                # Keep the frame cached, return to wait
+                return
+
+            # Frame is within the display window, break and display it
+            break
+
+        # Display the frame if we have one
+        if self.current_gui_frame is not None:
+            sbs_frame = self.current_gui_frame
+            timestamp_ms = self.current_gui_ts
+            # Clear cache so we grab a new frame next time
+            self.current_gui_frame = None
+            self.current_gui_ts = None
             
             # Update FPS history
             now = time.time()
