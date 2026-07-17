@@ -1489,6 +1489,7 @@ class SBSPlayerGUI(QMainWindow):
         """)
 
         # ── Widget Creation ──────────────────────────────────────────
+        self.settings_widget = QWidget()
         self.settings_widget.setObjectName("settings_widget")
         settings_layout = QVBoxLayout(self.settings_widget)
         settings_layout.setContentsMargins(4, 4, 4, 4)
