@@ -179,37 +179,44 @@ class SBSVideoPlayer:
         self.rife_engine = None
 
         # Load video metadata (try av first for HEVC support, fall back to cv2)
-        try:
-            container = av.open(self.video_path)
-            vid = container.streams.video[0]
-            self.total_frames = vid.frames if vid.frames else 0
-            self.video_fps = float(vid.average_rate) if vid.average_rate else 0.0
-            if self.video_fps <= 0:
-                self.video_fps = float(vid.guessed_rate) if vid.guessed_rate else 24.0
-            if vid.duration:
-                self.duration_sec = float(vid.duration * vid.time_base)
-            elif container.duration:
-                self.duration_sec = float(container.duration / av.time_base)
-            elif self.total_frames > 0 and self.video_fps > 0:
+        if self.video_path:
+            try:
+                container = av.open(self.video_path)
+                vid = container.streams.video[0]
+                self.total_frames = vid.frames if vid.frames else 0
+                self.video_fps = float(vid.average_rate) if vid.average_rate else 0.0
+                if self.video_fps <= 0:
+                    self.video_fps = float(vid.guessed_rate) if vid.guessed_rate else 24.0
+                if vid.duration:
+                    self.duration_sec = float(vid.duration * vid.time_base)
+                elif container.duration:
+                    self.duration_sec = float(container.duration / av.time_base)
+                elif self.total_frames > 0 and self.video_fps > 0:
+                    self.duration_sec = self.total_frames / self.video_fps
+                else:
+                    self.duration_sec = 0.0
+                if self.total_frames == 0 and self.duration_sec > 0:
+                    self.total_frames = int(self.duration_sec * self.video_fps)
+                self.width = vid.width
+                self.height = vid.height
+                container.close()
+                print(f"[Info] Video metadata (av): {self.width}x{self.height} @ {self.video_fps:.2f}fps, {self.total_frames} frames")
+            except Exception:
+                cap = cv2.VideoCapture(self.video_path)
+                self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                self.video_fps = cap.get(cv2.CAP_PROP_FPS)
+                if self.video_fps <= 0:
+                    self.video_fps = 24.0
                 self.duration_sec = self.total_frames / self.video_fps
-            else:
-                self.duration_sec = 0.0
-            if self.total_frames == 0 and self.duration_sec > 0:
-                self.total_frames = int(self.duration_sec * self.video_fps)
-            self.width = vid.width
-            self.height = vid.height
-            container.close()
-            print(f"[Info] Video metadata (av): {self.width}x{self.height} @ {self.video_fps:.2f}fps, {self.total_frames} frames")
-        except Exception:
-            cap = cv2.VideoCapture(self.video_path)
-            self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            self.video_fps = cap.get(cv2.CAP_PROP_FPS)
-            if self.video_fps <= 0:
-                self.video_fps = 24.0
-            self.duration_sec = self.total_frames / self.video_fps
-            self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            cap.release()
+                self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                cap.release()
+        else:
+            self.total_frames = 0
+            self.video_fps = 30.0
+            self.duration_sec = 0.0
+            self.width = 1920
+            self.height = 1080
 
         # Load config
         self.load_config()
@@ -1244,7 +1251,7 @@ class SBSPlayerGUI(QMainWindow):
         self.fullscreen_mode = False
         
         # Playlist state
-        self.playlist = [self.player.video_path]
+        self.playlist = [self.player.video_path] if self.player.video_path else []
         self.current_playlist_idx = 0
 
         # Initialize NVML for accurate GPU VRAM stats
@@ -1261,9 +1268,11 @@ class SBSPlayerGUI(QMainWindow):
         
         self.current_gui_frame = None
         self.current_gui_ts = None
+        self._stats_update_time = 0.0
         
-        # Start background player threads
-        self.player.start_threads()
+        # Start background player threads only if a video is loaded
+        if self.player.video_path:
+            self.player.start_threads()
         
         # Frame timer
         self.timer = QTimer(self)
@@ -1465,6 +1474,10 @@ class SBSPlayerGUI(QMainWindow):
                 self.player.seek_audio_target = 0
                 self.player.play = True
                 self.play_button.setText("Pause")
+            self.current_gui_frame = None
+            self.current_gui_ts = None
+            self.timer.start(16)
+            return
 
         # Sync to audio time
         audio_time = self.player.get_audio_time()
@@ -1577,6 +1590,7 @@ class SBSPlayerGUI(QMainWindow):
                 f"Infer Latency: {self.player.last_inference_ms:.1f}ms [{backend}]\n"
                 f"Warp Latency: {self.player.last_warp_ms:.1f}ms"
             )
+            self._stats_update_time = time.time()
             
             h, w, c = sbs_frame.shape
             bytes_per_line = c * w
@@ -1587,6 +1601,9 @@ class SBSPlayerGUI(QMainWindow):
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             ))
+
+        if time.time() - self._stats_update_time > 0.3:
+            self.stats_label.setText("")
 
         self.timer.start(16)
 
@@ -1711,6 +1728,13 @@ class SBSPlayerGUI(QMainWindow):
         # Stop threads
         self.player.running = False
         time.sleep(0.5)
+        
+        # Clear stale state from previous video
+        self.player.flush_queues()
+        self.player.seek_epoch += 1
+        self.player._seek_accept_behind = True
+        self.current_gui_frame = None
+        self.current_gui_ts = None
         
         # Load new video
         self.player.video_path = file_path
@@ -1847,7 +1871,7 @@ class SBSPlayerGUI(QMainWindow):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="2D to 3D SBS Video Player using Depth-Anything")
-    parser.add_argument("video", type=str, help="Path to input 2D video file")
+    parser.add_argument("video", nargs="?", default=None, help="Path to input 2D video file (optional)")
     parser.add_argument("--model", type=str, default="depth-anything/Depth-Anything-V2-Large-hf",
                         choices=ALL_MODELS,
                         help="Depth model to use (V2 or DA3)")
@@ -1884,6 +1908,9 @@ if __name__ == "__main__":
     )
 
     if args.no_gui:
+        if not args.video:
+            print("[Error] --no-gui mode requires a video file.")
+            sys.exit(1)
         player.run()
     else:
         app = QApplication(sys.argv)
