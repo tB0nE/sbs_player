@@ -1296,6 +1296,221 @@ class SBSPlayerGUI(QMainWindow):
         self.timer.start(16)
 
     def init_ui(self):
+        self.setStyleSheet("""
+            /* ── Base ─────────────────────────────── */
+            QMainWindow, QWidget {
+                background-color: #0d0d1a;
+                color: #c8c8d4;
+                font-family: "Inter", "Segoe UI", sans-serif;
+                font-size: 13px;
+            }
+
+            /* ── Menubar ──────────────────────────── */
+            QMenuBar {
+                background: #12122a;
+                border-bottom: 1px solid #1e1e3a;
+                padding: 2px 0;
+            }
+            QMenuBar::item { padding: 4px 10px; border-radius: 4px; }
+            QMenuBar::item:selected { background: #1e1e3a; }
+            QMenu {
+                background: #12122a;
+                border: 1px solid #1e1e3a;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 24px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected { background: #e94560; color: #fff; }
+
+            /* ── Panels ────────────────────────────── */
+            QWidget#settings_widget, QWidget#playlist_panel {
+                background: #12122a;
+                border: 1px solid #1e1e3a;
+                border-radius: 8px;
+                margin: 4px;
+            }
+
+            /* ── Headers ───────────────────────────── */
+            QLabel { color: #c8c8d4; }
+            QLabel b { color: #e0e0f0; }
+
+            /* ── Buttons ───────────────────────────── */
+            QPushButton {
+                background: #1a1a3a;
+                color: #c8c8d4;
+                border: 1px solid #2a2a4a;
+                border-radius: 6px;
+                padding: 6px 14px;
+            }
+            QPushButton:hover { background: #252550; border-color: #3a3a6a; }
+            QPushButton:pressed { background: #e94560; color: #fff; border-color: #e94560; }
+            QPushButton:checked { background: #e94560; color: #fff; }
+
+            /* Transport buttons */
+            QPushButton#prev_btn, QPushButton#play_button,
+            QPushButton#next_btn, QPushButton#mute_button,
+            QPushButton#playlist_toggle_controls_btn,
+            QPushButton#settings_toggle_controls_btn {
+                font-size: 11px;
+                padding: 4px 10px;
+            }
+
+            /* Close buttons (× «) */
+            QPushButton[text=\"×\"], QPushButton[text=\"«\"] {
+                background: transparent;
+                border: none;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0;
+                color: #888;
+            }
+            QPushButton[text=\"×\"]:hover, QPushButton[text=\"«\"]:hover {
+                color: #e94560;
+                background: #1e1e3a;
+                border-radius: 4px;
+            }
+
+            /* ── Sliders ───────────────────────────── */
+            QSlider::groove:horizontal {
+                background: #1e1e3a;
+                height: 6px;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #e94560;
+                width: 16px;
+                height: 16px;
+                margin: -5px 0;
+                border-radius: 8px;
+            }
+            QSlider::handle:horizontal:hover { background: #ff5a7a; }
+            QSlider::sub-page:horizontal { background: #e94560; border-radius: 3px; }
+
+            /* ── Seek Slider ───────────────────────── */
+            QSlider#seek_slider::groove:horizontal { height: 8px; }
+            QSlider#seek_slider::handle:horizontal {
+                width: 14px; height: 14px;
+                margin: -3px 0;
+                background: #fff;
+                border: 2px solid #e94560;
+            }
+
+            /* ── Checkboxes ────────────────────────── */
+            QCheckBox { spacing: 8px; }
+            QCheckBox::indicator {
+                width: 18px; height: 18px;
+                border: 2px solid #2a2a4a;
+                border-radius: 4px;
+                background: #0d0d1a;
+            }
+            QCheckBox::indicator:checked {
+                background: #e94560;
+                border-color: #e94560;
+            }
+
+            /* ── Combobox ──────────────────────────── */
+            QComboBox {
+                background: #1a1a3a;
+                border: 1px solid #2a2a4a;
+                border-radius: 6px;
+                padding: 6px 10px;
+                color: #c8c8d4;
+            }
+            QComboBox:hover { border-color: #3a3a6a; }
+            QComboBox::drop-down { border: none; width: 24px; }
+            QComboBox QAbstractItemView {
+                background: #12122a;
+                border: 1px solid #1e1e3a;
+                border-radius: 4px;
+                selection-background-color: #e94560;
+            }
+
+            /* ── List Widget ───────────────────────── */
+            QListWidget {
+                background: #0d0d1a;
+                border: 1px solid #1e1e3a;
+                border-radius: 6px;
+                padding: 4px;
+                outline: 0;
+            }
+            QListWidget::item {
+                padding: 8px 10px;
+                border-radius: 4px;
+                margin: 2px 0;
+            }
+            QListWidget::item:selected {
+                background: #e94560;
+                color: #fff;
+            }
+            QListWidget::item:hover { background: #1a1a3a; }
+            QListWidget::item:selected:hover { background: #e94560; }
+
+            /* ── Scrollbars ────────────────────────── */
+            QScrollBar:vertical {
+                background: #0d0d1a;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #2a2a4a;
+                min-height: 30px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical:hover { background: #3a3a6a; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+
+            /* ── Splitter ──────────────────────────── */
+            QSplitter::handle {
+                background: #1e1e3a;
+                width: 2px;
+            }
+
+            /* ── Tooltips ──────────────────────────── */
+            QToolTip {
+                background: #12122a;
+                color: #c8c8d4;
+                border: 1px solid #1e1e3a;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+
+            /* ── Stats / Time Labels ───────────────── */
+            QLabel#stats_label {
+                color: #777;
+                font-size: 11px;
+                font-family: "JetBrains Mono", "Fira Code", monospace;
+                padding: 8px 4px;
+            }
+            QLabel#time_label {
+                color: #999;
+                font-size: 11px;
+                padding: 0 8px;
+            }
+
+            /* ── Volume Slider ─────────────────────── */
+            QSlider#volume_slider::groove:horizontal {
+                height: 4px;
+                background: #1e1e3a;
+                border-radius: 2px;
+            }
+            QSlider#volume_slider::handle:horizontal {
+                width: 12px; height: 12px;
+                margin: -4px 0;
+                background: #e94560;
+                border-radius: 6px;
+            }
+            QSlider#volume_slider::sub-page:horizontal {
+                background: #e94560;
+                border-radius: 2px;
+            }
+        """)
+
+        # Set object names for QSS targeting
+        self.settings_widget.setObjectName("settings_widget")
+
         # Menu
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -1394,7 +1609,7 @@ class SBSPlayerGUI(QMainWindow):
         # Video Label
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
-        self.video_label.setStyleSheet("background-color: black;")
+        self.video_label.setStyleSheet("QLabel { background-color: #050510; border: 1px solid #1e1e3a; border-radius: 4px; }")
         self.video_label.setMinimumSize(640, 360)
         right_layout.addWidget(self.video_label, 1)
 
@@ -1403,6 +1618,7 @@ class SBSPlayerGUI(QMainWindow):
         playback_layout = QVBoxLayout(self.playback_widget)
         
         self.seek_slider = QSlider(Qt.Horizontal)
+        self.seek_slider.setObjectName("seek_slider")
         self.seek_slider.setRange(0, int(self.player.duration_sec))
         self.seek_slider.sliderPressed.connect(self.on_seek_press)
         self.seek_slider.sliderReleased.connect(self.on_seek_release)
@@ -1410,35 +1626,43 @@ class SBSPlayerGUI(QMainWindow):
 
         controls_layout = QHBoxLayout()
         self.prev_btn = QPushButton("|<")
+        self.prev_btn.setObjectName("prev_btn")
         self.prev_btn.clicked.connect(self.on_playlist_prev)
         controls_layout.addWidget(self.prev_btn)
 
         self.play_button = QPushButton("Pause")
+        self.play_button.setObjectName("play_button")
         self.play_button.clicked.connect(self.toggle_play)
         controls_layout.addWidget(self.play_button)
 
         self.next_btn = QPushButton(">|")
+        self.next_btn.setObjectName("next_btn")
         self.next_btn.clicked.connect(self.on_playlist_next)
         controls_layout.addWidget(self.next_btn)
 
         self.time_label = QLabel("00:00 / 00:00")
+        self.time_label.setObjectName("time_label")
         controls_layout.addWidget(self.time_label)
 
         controls_layout.addStretch()
 
         self.playlist_toggle_controls_btn = QPushButton("Playlist ◂")
+        self.playlist_toggle_controls_btn.setObjectName("playlist_toggle_controls_btn")
         self.playlist_toggle_controls_btn.clicked.connect(self.toggle_playlist)
         controls_layout.addWidget(self.playlist_toggle_controls_btn)
 
         self.settings_toggle_controls_btn = QPushButton("Settings ▸")
+        self.settings_toggle_controls_btn.setObjectName("settings_toggle_controls_btn")
         self.settings_toggle_controls_btn.clicked.connect(self.toggle_settings)
         controls_layout.addWidget(self.settings_toggle_controls_btn)
 
         self.mute_button = QPushButton("Mute")
+        self.mute_button.setObjectName("mute_button")
         self.mute_button.clicked.connect(self.toggle_mute)
         controls_layout.addWidget(self.mute_button)
 
         self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setObjectName("volume_slider")
         self.volume_slider.setRange(0, 100)
         self.volume_slider.setValue(100)
         self.volume_slider.setFixedWidth(120)
@@ -1450,6 +1674,7 @@ class SBSPlayerGUI(QMainWindow):
 
         # Playlist Panel (Right, collapsible)
         self.playlist_panel = QWidget()
+        self.playlist_panel.setObjectName("playlist_panel")
         playlist_panel_layout = QVBoxLayout(self.playlist_panel)
         playlist_panel_layout.setContentsMargins(4, 4, 4, 4)
 
@@ -1476,6 +1701,7 @@ class SBSPlayerGUI(QMainWindow):
         playlist_panel_layout.addLayout(playlist_btns)
 
         self.stats_label = QLabel()
+        self.stats_label.setObjectName("stats_label")
         playlist_panel_layout.addWidget(self.stats_label)
 
         # Add to splitter
