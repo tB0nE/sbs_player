@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import sys
 import os
 os.environ["OPENCV_VIDEO_DEBUG"] = "0"
@@ -316,22 +317,34 @@ class SBSVideoPlayer:
         self.onnx_path = os.path.join(self.checkpoints_dir, onnx_filename)
 
         if not os.path.exists(self.onnx_path):
-            print(f"[Info] ONNX model not found. Exporting {self.model_name} to ONNX (this is done once)...")
-            from transformers import AutoModelForDepthEstimation
-            pytorch_model = AutoModelForDepthEstimation.from_pretrained(self.model_name)
-            pytorch_model.eval()
-            dummy_input = torch.randn(1, 3, self.inference_size, self.inference_size)
-            torch.onnx.export(
-                pytorch_model,
-                (dummy_input,),
-                self.onnx_path,
-                input_names=['pixel_values'],
-                output_names=['predicted_depth'],
-                opset_version=17,
-            )
-            print(f"[Info] Exported ONNX model saved to: {self.onnx_path}")
-            del pytorch_model
-            torch.cuda.empty_cache()
+            print(f"[Info] ONNX model not found at: {self.onnx_path}")
+            print(f"[Info] Attempting to export from PyTorch (requires transformers)...")
+            try:
+                from transformers import AutoModelForDepthEstimation
+                pytorch_model = AutoModelForDepthEstimation.from_pretrained(self.model_name)
+                pytorch_model.eval()
+                dummy_input = torch.randn(1, 3, self.inference_size, self.inference_size)
+                torch.onnx.export(
+                    pytorch_model,
+                    (dummy_input,),
+                    self.onnx_path,
+                    input_names=['pixel_values'],
+                    output_names=['predicted_depth'],
+                    opset_version=17,
+                )
+                print(f"[Info] Exported ONNX model saved to: {self.onnx_path}")
+                del pytorch_model
+                torch.cuda.empty_cache()
+            except ImportError:
+                print(f"[Error] The ONNX model file was not found and 'transformers' is not installed.")
+                print(f"[Error] Please download the ONNX model manually:")
+                print(f"[Error]   Place it at: {self.onnx_path}")
+                print(f"[Error]   Or run: pip install transformers && re-launch the app")
+                sys.exit(1)
+            except Exception as e:
+                print(f"[Error] Failed to export ONNX model: {e}")
+                print(f"[Error] Please download the ONNX model manually to: {self.onnx_path}")
+                sys.exit(1)
 
         import tensorrt as trt
         self.trt_logger = trt.Logger(trt.Logger.WARNING)
