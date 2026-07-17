@@ -754,14 +754,14 @@ class SBSVideoPlayer:
 
             t0 = time.perf_counter()
 
-            # Upload and preprocess efficiently on GPU with minimal allocations
-            frame_gpu = torch.from_numpy(frame).to(self.device, non_blocking=True)
+            # Pre-shrink on CPU before H2D: resize BGR to model resolution
+            small_frame = cv2.resize(frame, (self.inference_size, self.inference_size), interpolation=cv2.INTER_LINEAR)
+            frame_gpu = torch.from_numpy(small_frame).to(self.device, non_blocking=True)
             frame_gpu = frame_gpu.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float16)
-            frame_gpu = frame_gpu.flip(1) # BGR -> RGB
-            resized_gpu = torch.nn.functional.interpolate(frame_gpu, size=(self.inference_size, self.inference_size), mode='bilinear', align_corners=False)
-            
-            # In-place normalization directly into the pre-allocated input buffer
-            self.trt_d_input.copy_(resized_gpu)
+            frame_gpu = frame_gpu.flip(1)  # BGR -> RGB
+
+            # Normalize directly into pre-allocated TRT input buffer
+            self.trt_d_input.copy_(frame_gpu)
             self.trt_d_input.div_(255.0).sub_(self._mean).div_(self._std)
 
             self.last_preprocess_ms = (time.perf_counter() - t0) * 1000.0
@@ -781,14 +781,16 @@ class SBSVideoPlayer:
                     depth.mul_(self.alpha).add_(self.prev_depth_gpu, alpha=1.0 - self.alpha)
                 self.prev_depth_gpu.copy_(depth)
 
-            depth_resized = torch.nn.functional.interpolate(depth.unsqueeze(1), size=(h, w), mode='bilinear', align_corners=False).squeeze(0).squeeze(0)
-            depth_min = depth_resized.min()
-            depth_max = depth_resized.max()
+            # Download small depth map, upscale to full resolution on CPU
+            depth_small = depth.float().cpu().numpy()
+            depth_min = depth_small.min()
+            depth_max = depth_small.max()
             diff = depth_max - depth_min
             if diff > 0:
-                normalized_depth = ((depth_resized - depth_min) / diff).pow(self.depth_gamma).float().cpu().numpy()
+                depth_norm_small = np.power((depth_small - depth_min) / diff, self.depth_gamma)
             else:
-                normalized_depth = np.zeros((h, w), dtype=np.float32)
+                depth_norm_small = np.zeros((self.inference_size, self.inference_size), dtype=np.float32)
+            normalized_depth = cv2.resize(depth_norm_small, (w, h), interpolation=cv2.INTER_LINEAR)
             self.last_postprocess_ms = (time.perf_counter() - t2) * 1000.0
             self.last_inference_ms = (time.perf_counter() - t0) * 1000.0
 
