@@ -15,7 +15,7 @@ import av
 import sounddevice as sd
 import pynvml
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-                             QSlider, QLabel, QPushButton, QComboBox, QCheckBox, QFileDialog, QSplitter, QListWidget)
+                             QSlider, QLabel, QPushButton, QComboBox, QCheckBox, QFileDialog, QListWidget)
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap, QKeyEvent
 
@@ -1488,12 +1488,7 @@ class SBSPlayerGUI(QMainWindow):
             }
         """)
 
-        # Main Layout splitter
-        splitter = QSplitter(Qt.Horizontal)
-        self.setCentralWidget(splitter)
-
-        # Settings Panel (Left)
-        self.settings_widget = QWidget()
+        # ── Widget Creation ──────────────────────────────────────────
         self.settings_widget.setObjectName("settings_widget")
         settings_layout = QVBoxLayout(self.settings_widget)
         settings_layout.setContentsMargins(4, 4, 4, 4)
@@ -1571,17 +1566,13 @@ class SBSPlayerGUI(QMainWindow):
         self.doubler_checkbox.stateChanged.connect(self.on_doubler_changed)
         settings_layout.addWidget(self.doubler_checkbox)
 
-        # Right Side (Video + Playback)
-        right_widget = QWidget()
-        right_layout = QVBoxLayout(right_widget)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        # Right Side (Video + Playback) removed — video is now in main layout directly
 
         # Video Label
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setStyleSheet("QLabel { background-color: #050510; border: 1px solid #1e1e3a; border-radius: 4px; }")
         self.video_label.setMinimumSize(640, 360)
-        right_layout.addWidget(self.video_label, 1)
 
         # Playback panel
         self.playback_widget = QWidget()
@@ -1640,7 +1631,6 @@ class SBSPlayerGUI(QMainWindow):
         controls_layout.addWidget(self.volume_slider)
 
         playback_layout.addLayout(controls_layout)
-        right_layout.addWidget(self.playback_widget)
 
         # Playlist Panel (Right, collapsible)
         self.playlist_panel = QWidget()
@@ -1674,13 +1664,25 @@ class SBSPlayerGUI(QMainWindow):
         self.stats_label.setObjectName("stats_label")
         playlist_panel_layout.addWidget(self.stats_label)
 
-        # Add to splitter
-        splitter.addWidget(self.settings_widget)
-        splitter.addWidget(right_widget)
-        splitter.addWidget(self.playlist_panel)
-        splitter.setSizes([300, 650, 250])
+        # ── Layout Assembly ──────────────────────────────────────────
+        center = QWidget()
+        self.setCentralWidget(center)
+        main_layout = QVBoxLayout(center)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        video_row = QHBoxLayout()
+        video_row.setContentsMargins(0, 0, 0, 0)
+        video_row.setSpacing(0)
+        video_row.addWidget(self.settings_widget)
+        video_row.addWidget(self.video_label, 1)
+        video_row.addWidget(self.playlist_panel)
+        main_layout.addLayout(video_row, 1)
+        main_layout.addWidget(self.playback_widget)
 
         # Initial state: settings hidden, playlist shown
+        self.settings_widget.setFixedWidth(300)
+        self.playlist_panel.setFixedWidth(250)
         self.settings_widget.hide()
         self.settings_toggle_btn.setText("«")
         self.settings_toggle_controls_btn.setText("Settings ▸")
