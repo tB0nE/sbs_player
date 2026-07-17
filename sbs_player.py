@@ -1305,26 +1305,6 @@ class SBSPlayerGUI(QMainWindow):
                 font-size: 13px;
             }
 
-            /* ── Menubar ──────────────────────────── */
-            QMenuBar {
-                background: #12122a;
-                border-bottom: 1px solid #1e1e3a;
-                padding: 2px 0;
-            }
-            QMenuBar::item { padding: 4px 10px; border-radius: 4px; }
-            QMenuBar::item:selected { background: #1e1e3a; }
-            QMenu {
-                background: #12122a;
-                border: 1px solid #1e1e3a;
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item {
-                padding: 6px 24px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected { background: #e94560; color: #fff; }
-
             /* ── Panels ────────────────────────────── */
             QWidget#settings_widget, QWidget#playlist_panel {
                 background: #12122a;
@@ -1507,14 +1487,6 @@ class SBSPlayerGUI(QMainWindow):
                 border-radius: 2px;
             }
         """)
-
-        # Menu
-        menubar = self.menuBar()
-        file_menu = menubar.addMenu("File")
-        open_action = file_menu.addAction("Open Video")
-        open_action.triggered.connect(self.open_file)
-        exit_action = file_menu.addAction("Exit")
-        exit_action.triggered.connect(self.close)
 
         # Main Layout splitter
         splitter = QSplitter(Qt.Horizontal)
@@ -2126,7 +2098,6 @@ class SBSPlayerGUI(QMainWindow):
             self.settings_widget.hide()
             self.playlist_panel.hide()
             self.playback_widget.hide()
-            self.menuBar().hide()
             self.showFullScreen()
         else:
             if self.settings_toggle_btn.text() == "×":
@@ -2134,12 +2105,14 @@ class SBSPlayerGUI(QMainWindow):
             if self.playlist_toggle_btn.text() == "×":
                 self.playlist_panel.show()
             self.playback_widget.show()
-            self.menuBar().show()
             self.showNormal()
 
     def keyPressEvent(self, event):
         key = event.key()
-        if key == Qt.Key_Space:
+        mods = event.modifiers()
+        if mods == Qt.ControlModifier and key == Qt.Key_O:
+            self.open_file()
+        elif key == Qt.Key_Space:
             self.toggle_play()
         elif key == Qt.Key_F:
             self.toggle_fullscreen()
