@@ -1150,9 +1150,6 @@ class SBSVideoPlayer:
         pass
 
     def start_threads(self):
-        if self.use_frame_doubler and (not hasattr(self, 'rife_context') or self.rife_context is None):
-            self._load_rife_trt_model()
-
         self._threads = []
 
         reader = threading.Thread(target=self.video_reader_thread, daemon=False)
@@ -1163,20 +1160,10 @@ class SBSVideoPlayer:
         reader.start()
         processor.start()
         warper.start()
-
-        self._threads = [reader, processor, warper]
-
-        print("[Info] Priming pipeline...")
-        t0 = time.time()
-        while self.sbs_queue.empty() and self.running:
-            time.sleep(0.05)
-            if time.time() - t0 > 10.0:
-                print("[Warning] Pipeline priming timed out, starting audio anyway.")
-                break
-
         audio.start()
-        self._threads.append(audio)
-        print(f"[Info] Audio started (pipeline latency: {self.pipeline_latency:.3f}s)")
+
+        self._threads = [reader, processor, warper, audio]
+        print("[Info] All threads started.")
 
     def run_display_loop(self):
         window_name = "2D to 3D SBS Player"
@@ -2059,8 +2046,27 @@ class SBSPlayerGUI(QMainWindow):
     def on_doubler_changed(self, state):
         self.player.use_frame_doubler = (state == Qt.Checked or state == 2)
         if self.player.use_frame_doubler and (not hasattr(self.player, 'rife_context') or self.player.rife_context is None):
-            self.player._load_rife_trt_model()
+            self._run_rife_build()
         self._mark_config_dirty()
+
+    def _run_rife_build(self):
+        if getattr(self, '_rife_building', False):
+            return
+        self._rife_building = True
+        self.stats_label.setText("Building RIFE engine...")
+        threading.Thread(target=self._rife_build_worker, daemon=True).start()
+
+    def _rife_build_worker(self):
+        try:
+            self.player._load_rife_trt_model()
+        except Exception as e:
+            print(f"[Error] RIFE build failed: {e}")
+        self._rife_building = False
+        QTimer.singleShot(0, self._on_rife_ready)
+
+    def _on_rife_ready(self):
+        self._rife_building = False
+        self.stats_label.setText("")
 
     def on_seek_press(self):
         self.is_seeking = True
@@ -2139,7 +2145,7 @@ class SBSPlayerGUI(QMainWindow):
         
         # Force re-compile RIFE if width/height changed and doubler is active
         if self.player.use_frame_doubler:
-            self.player._load_rife_trt_model()
+            self._run_rife_build()
         
         self.seek_slider.setRange(0, int(self.player.duration_sec))
         self.seek_slider.setValue(0)
@@ -2149,20 +2155,30 @@ class SBSPlayerGUI(QMainWindow):
 
     def on_model_changed(self, model_name):
         self.player.stop()
-        # Reload model
         self.player.model_name = model_name
         self.player.use_trt = model_name in V2_MODELS
         self.player.is_da3 = model_name in DA3_MODELS
-        
-        if self.player.use_trt:
-            self.player._load_v2_trt_model()
-        elif self.player.is_da3:
-            self.player._load_da3_model()
-        else:
-            self.player._load_v2_pytorch_model()
-            
         self.player.running = True
-        self.player.start_threads()
+        
+        self.stats_label.setText("Loading model...")
+        threading.Thread(target=self._model_load_worker, daemon=True).start()
+
+    def _model_load_worker(self):
+        try:
+            if self.player.use_trt:
+                self.player._load_v2_trt_model()
+            elif self.player.is_da3:
+                self.player._load_da3_model()
+            else:
+                self.player._load_v2_pytorch_model()
+        except Exception as e:
+            print(f"[Error] Model load failed: {e}")
+        QTimer.singleShot(0, self._on_model_ready)
+
+    def _on_model_ready(self):
+        self.stats_label.setText("")
+        if self.player.video_path:
+            self.player.start_threads()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
