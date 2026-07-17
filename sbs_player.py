@@ -112,6 +112,12 @@ class SBSVideoPlayer:
         self.use_trt = use_trt and (model_name in V2_MODELS)
         self.is_da3 = model_name in DA3_MODELS
         self.volume = 1.0
+        self.use_smoothing = True
+        self.use_edge_softness = True
+        self.use_artifact_smoothing = True
+        self.use_sharpen = True
+        self.hq_artifact_smoothing = False
+        self.use_frame_doubler = False
         self.load_config()
 
         # CLI args override persisted config
@@ -169,14 +175,6 @@ class SBSVideoPlayer:
         self._map_y = None
         self._cached_w = 0
         self._cached_h = 0
-
-        # Filter flags
-        self.use_smoothing = True
-        self.use_edge_softness = True
-        self.use_artifact_smoothing = True
-        self.use_sharpen = True
-        self.hq_artifact_smoothing = False
-        self.use_frame_doubler = False
 
         self.pipeline_latency = 0.5
         self.latency_alpha = 0.05
@@ -598,7 +596,6 @@ class SBSVideoPlayer:
 
         while self.running:
             if self.seek_video_target is not None:
-                self.seek_epoch += 1
                 target_sec = self.seek_video_target
                 target_offset = int(target_sec * av.time_base)
                 print(f"[Seek] AV reader seeking to {target_sec:.1f}s (offset={target_offset})")
@@ -690,7 +687,6 @@ class SBSVideoPlayer:
 
         while self.running:
             if self.seek_video_target is not None:
-                self.seek_epoch += 1
                 cap.set(cv2.CAP_PROP_POS_MSEC, self.seek_video_target * 1000.0)
                 self.flush_queues()
                 self.reset_temporal = True
@@ -2102,14 +2098,11 @@ class SBSPlayerGUI(QMainWindow):
 
     def on_seek_press(self):
         self.is_seeking = True
-        print(f"[Seek-DEBUG] sliderPressed is_seeking={self.is_seeking} value={self.seek_slider.value()}")
 
     def on_seek_value_changed(self, value):
         if self._seek_setting:
             return
-        print(f"[Seek-DEBUG] valueChanged value={value} is_seeking={self.is_seeking}")
         if not self.is_seeking:
-            print(f"[Seek-DEBUG] → click detected, processing seek")
             self._do_seek(value)
         else:
             self.time_label.setText(f"{self.format_time(value)} / {self.format_time(self.player.duration_sec)}")
@@ -2117,6 +2110,7 @@ class SBSPlayerGUI(QMainWindow):
     def _do_seek(self, target):
         self.is_seeking = True
         print(f"[Seek] target={target:.1f}s")
+        self.player.seek_epoch += 1
         self.player.play = True
         self.play_button.setText("Pause")
         self.player.seek_video_target = target
@@ -2134,7 +2128,6 @@ class SBSPlayerGUI(QMainWindow):
         self.is_seeking = False
 
     def on_seek_release(self):
-        print(f"[Seek-DEBUG] sliderReleased is_seeking={self.is_seeking} value={self.seek_slider.value()}")
         if self.is_seeking:
             self._do_seek(self.seek_slider.value())
 
