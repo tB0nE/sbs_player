@@ -2102,11 +2102,14 @@ class SBSPlayerGUI(QMainWindow):
 
     def on_seek_press(self):
         self.is_seeking = True
+        print(f"[Seek-DEBUG] sliderPressed is_seeking={self.is_seeking} value={self.seek_slider.value()}")
 
     def on_seek_value_changed(self, value):
         if self._seek_setting:
             return
+        print(f"[Seek-DEBUG] valueChanged value={value} is_seeking={self.is_seeking}")
         if not self.is_seeking:
+            print(f"[Seek-DEBUG] → click detected, processing seek")
             self._do_seek(value)
         else:
             self.time_label.setText(f"{self.format_time(value)} / {self.format_time(self.player.duration_sec)}")
@@ -2131,6 +2134,7 @@ class SBSPlayerGUI(QMainWindow):
         self.is_seeking = False
 
     def on_seek_release(self):
+        print(f"[Seek-DEBUG] sliderReleased is_seeking={self.is_seeking} value={self.seek_slider.value()}")
         if self.is_seeking:
             self._do_seek(self.seek_slider.value())
 
