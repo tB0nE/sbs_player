@@ -795,12 +795,11 @@ class SBSVideoPlayer:
             if depth_small.size == 0 or h == 0 or w == 0:
                 self.depth_queue.put((frame, np.zeros((h, w), dtype=np.float32), timestamp_ms, entry_time, epoch))
                 continue
-            # Percentile-based normalization (resists single outlier "pumping")
-            depth_min = np.percentile(depth_small, 5)
-            depth_max = np.percentile(depth_small, 95)
+            depth_min = depth_small.min()
+            depth_max = depth_small.max()
             diff = depth_max - depth_min
             if diff > 0:
-                depth_norm_small = np.clip(np.power((depth_small - depth_min) / diff, self.depth_gamma), 0, 1).astype(np.float32)
+                depth_norm_small = np.power((depth_small - depth_min) / diff, self.depth_gamma).astype(np.float32)
             else:
                 depth_norm_small = np.zeros((self.inference_size, self.inference_size), dtype=np.float32)
             normalized_depth = cv2.resize(depth_norm_small, (w, h), interpolation=cv2.INTER_LINEAR)
