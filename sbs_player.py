@@ -8,6 +8,7 @@ import threading
 import argparse
 import subprocess
 import ctypes
+from collections import deque
 import numpy as np
 import cv2
 import torch
@@ -135,15 +136,15 @@ class SBSVideoPlayer:
         self.last_postprocess_ms = 0.0
         self.last_warp_ms = 0.0
 
-        self.frame_queue = queue.Queue(maxsize=60)
-        self.depth_queue = queue.Queue(maxsize=60)
-        self.sbs_queue = queue.Queue(maxsize=90)
-        self.audio_queue = queue.Queue(maxsize=300)
+        self.frame_queue = queue.Queue(maxsize=4)
+        self.depth_queue = queue.Queue(maxsize=4)
+        self.sbs_queue = queue.Queue(maxsize=6)
+        self.audio_queue = queue.Queue(maxsize=64)
 
         self.running = True
         self.play = True
         self.fullscreen = False
-        self.fps_history = []
+        self.fps_history = deque()
         self._reset_temporal_depth = False
         self._reset_temporal_warp = False
         self.loop_video = False
@@ -1356,6 +1357,8 @@ class SBSPlayerGUI(QMainWindow):
         self.current_gui_frame = None
         self.current_gui_ts = None
         self._stats_update_time = 0.0
+        self._telemetry_cache = ""
+        self._telemetry_last_update = 0.0
         
         # Start background player threads only if a video is loaded
         if self.player.video_path:
@@ -1363,9 +1366,24 @@ class SBSPlayerGUI(QMainWindow):
         
         # Frame timer
         self.timer = QTimer(self)
+        self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self.update_frame)
         self.timer.setSingleShot(True)
         self.timer.start(16)
+
+        self._config_save_timer = QTimer(self)
+        self._config_save_timer.setSingleShot(True)
+        self._config_save_timer.timeout.connect(self._do_save_config)
+        self._config_dirty = False
+
+    def _do_save_config(self):
+        if self._config_dirty:
+            self._config_dirty = False
+            self.player.save_config()
+
+    def _mark_config_dirty(self):
+        self._config_dirty = True
+        self._config_save_timer.start(500)
 
     def init_ui(self):
         self.setStyleSheet("""
@@ -1587,7 +1605,7 @@ class SBSPlayerGUI(QMainWindow):
             lambda v: setattr(self.player, 'edge_softness', float(v)))
         self.soft_chk = QCheckBox("Enable Edge Softness")
         self.soft_chk.setChecked(self.player.use_edge_softness)
-        self.soft_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_edge_softness', state == 2), self.player.save_config()))
+        self.soft_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_edge_softness', state == 2), self._mark_config_dirty()))
         settings_layout.addWidget(self.soft_chk)
             
         self.gamma_slider = self.create_slider(settings_layout, "Depth Gamma", 5, 100, int(self.player.depth_gamma * 100),
@@ -1597,26 +1615,26 @@ class SBSPlayerGUI(QMainWindow):
             lambda v: setattr(self.player, 'sharpen', float(v)))
         self.sharp_chk = QCheckBox("Enable Sharpening")
         self.sharp_chk.setChecked(self.player.use_sharpen)
-        self.sharp_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_sharpen', state == 2), self.player.save_config()))
+        self.sharp_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_sharpen', state == 2), self._mark_config_dirty()))
         settings_layout.addWidget(self.sharp_chk)
             
         self.smooth_slider = self.create_slider(settings_layout, "Artifact Smoothing", 0, 100, int(self.player.artifact_smoothing * 10),
             lambda v: setattr(self.player, 'artifact_smoothing', v / 10.0), scale=10.0)
         self.smooth_chk = QCheckBox("Enable Artifact Smoothing")
         self.smooth_chk.setChecked(self.player.use_artifact_smoothing)
-        self.smooth_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_artifact_smoothing', state == 2), self.player.save_config()))
+        self.smooth_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_artifact_smoothing', state == 2), self._mark_config_dirty()))
         settings_layout.addWidget(self.smooth_chk)
 
         self.hq_smooth_chk = QCheckBox("High Quality Artifact Mask")
         self.hq_smooth_chk.setChecked(self.player.hq_artifact_smoothing)
-        self.hq_smooth_chk.stateChanged.connect(lambda state: (setattr(self.player, 'hq_artifact_smoothing', state == 2), self.player.save_config()))
+        self.hq_smooth_chk.stateChanged.connect(lambda state: (setattr(self.player, 'hq_artifact_smoothing', state == 2), self._mark_config_dirty()))
         settings_layout.addWidget(self.hq_smooth_chk)
             
         self.alpha_slider = self.create_slider(settings_layout, "Temporal Alpha", 5, 100, int(self.player.alpha * 100),
             lambda v: setattr(self.player, 'alpha', v / 100.0), scale=100.0)
         self.temporal_chk = QCheckBox("Enable Temporal Smoothing")
         self.temporal_chk.setChecked(self.player.use_smoothing)
-        self.temporal_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_smoothing', state == 2), self.player.save_config()))
+        self.temporal_chk.stateChanged.connect(lambda state: (setattr(self.player, 'use_smoothing', state == 2), self._mark_config_dirty()))
         settings_layout.addWidget(self.temporal_chk)
 
         # Model Selector
@@ -1775,7 +1793,7 @@ class SBSPlayerGUI(QMainWindow):
             real_val = val / scale if scale != 1.0 else val
             label.setText(f"{label_text}: {real_val:.2f}" if scale != 1.0 else f"{label_text}: {real_val}")
             callback(val)
-            self.player.save_config()
+            self._mark_config_dirty()
             
         slider.valueChanged.connect(on_change)
         layout.addWidget(label)
@@ -1882,37 +1900,42 @@ class SBSPlayerGUI(QMainWindow):
             # Update FPS history
             now = time.time()
             self.player.fps_history.append(now)
-            self.player.fps_history = [t for t in self.player.fps_history if now - t < 1.0]
+            while self.player.fps_history and now - self.player.fps_history[0] > 1.0:
+                self.player.fps_history.popleft()
             
             if not self.is_seeking:
                 current_time = timestamp_ms / 1000.0
                 self.seek_slider.setValue(int(current_time))
                 self.time_label.setText(f"{self.format_time(current_time)} / {self.format_time(self.player.duration_sec)}")
             
-            # Show stats
-            gpu_util = torch.cuda.utilization() if torch.cuda.is_available() else 0
-            if self.nvml_initialized:
-                try:
-                    info = pynvml.nvmlDeviceGetMemoryInfo(self.nvml_handle)
-                    vram_used = info.used / (1024 ** 3)
-                    vram_total = info.total / (1024 ** 3)
-                    vram_str = f"{vram_used:.2f} / {vram_total:.1f} GB"
-                except Exception:
-                    vram_str = "Error"
-            else:
-                vram_used = torch.cuda.memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0
-                vram_reserved = torch.cuda.memory_reserved() / (1024 ** 3) if torch.cuda.is_available() else 0
-                vram_str = f"{vram_used:.1f} / {vram_reserved:.1f} GB (PyTorch)"
-            
-            backend = "TRT" if self.player.use_trt else ("DA3" if self.player.is_da3 else "PT")
-            self.stats_label.setText(
-                f"FPS: {len(self.player.fps_history)}\n"
-                f"GPU Util: {gpu_util}%\n"
-                f"VRAM: {vram_str}\n"
-                f"Infer Latency: {self.player.last_inference_ms:.1f}ms [{backend}]\n"
-                f"Warp Latency: {self.player.last_warp_ms:.1f}ms"
-            )
-            self._stats_update_time = time.time()
+            # Show stats (rate-limited to 2 Hz)
+            now_ts = time.time()
+            if now_ts - self._telemetry_last_update >= 0.5:
+                self._telemetry_last_update = now_ts
+                gpu_util = torch.cuda.utilization() if torch.cuda.is_available() else 0
+                if self.nvml_initialized:
+                    try:
+                        info = pynvml.nvmlDeviceGetMemoryInfo(self.nvml_handle)
+                        vram_used = info.used / (1024 ** 3)
+                        vram_total = info.total / (1024 ** 3)
+                        vram_str = f"{vram_used:.2f} / {vram_total:.1f} GB"
+                    except Exception:
+                        vram_str = "Error"
+                else:
+                    vram_used = torch.cuda.memory_allocated() / (1024 ** 3) if torch.cuda.is_available() else 0
+                    vram_reserved = torch.cuda.memory_reserved() / (1024 ** 3) if torch.cuda.is_available() else 0
+                    vram_str = f"{vram_used:.1f} / {vram_reserved:.1f} GB (PyTorch)"
+                backend = "TRT" if self.player.use_trt else ("DA3" if self.player.is_da3 else "PT")
+                self._telemetry_cache = (
+                    f"FPS: {len(self.player.fps_history)}\n"
+                    f"GPU Util: {gpu_util}%\n"
+                    f"VRAM: {vram_str}\n"
+                    f"Infer Latency: {self.player.last_inference_ms:.1f}ms [{backend}]\n"
+                    f"Warp Latency: {self.player.last_warp_ms:.1f}ms"
+                )
+            if self._telemetry_cache:
+                self.stats_label.setText(self._telemetry_cache)
+            self._stats_update_time = now_ts
             
             h, w, c = sbs_frame.shape
             bytes_per_line = c * w
@@ -2037,7 +2060,7 @@ class SBSPlayerGUI(QMainWindow):
         self.player.use_frame_doubler = (state == Qt.Checked or state == 2)
         if self.player.use_frame_doubler and (not hasattr(self.player, 'rife_context') or self.player.rife_context is None):
             self.player._load_rife_trt_model()
-        self.player.save_config()
+        self._mark_config_dirty()
 
     def on_seek_press(self):
         self.is_seeking = True
@@ -2206,7 +2229,7 @@ class SBSPlayerGUI(QMainWindow):
             super().keyPressEvent(event)
 
     def closeEvent(self, event):
-        self.player.save_config()
+        self._mark_config_dirty()
         self.player.stop()
         event.accept()
         QApplication.quit()
