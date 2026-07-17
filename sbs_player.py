@@ -152,6 +152,7 @@ class SBSVideoPlayer:
         self.volume = 1.0
         self.sys_clock_start = time.time()
         self.sys_clock_pause_time = time.time()
+        self._last_valid_audio_time = 0.0
 
         # Warp cache
         self._map_x = None
@@ -967,13 +968,11 @@ class SBSVideoPlayer:
         self.audio_samples_played += filled
 
     def get_audio_time(self):
-        if not self.has_audio:
-            if self.play:
-                return time.time() - self.sys_clock_start
-            else:
-                return self.sys_clock_pause_time - self.sys_clock_start
-        
-        return max(0.0, (self.audio_samples_played - self.audio_latency_frames) / self.audio_sample_rate)
+        if self.has_audio:
+            t = max(0.0, (self.audio_samples_played - self.audio_latency_frames) / self.audio_sample_rate)
+            self._last_valid_audio_time = t
+            return t
+        return self._last_valid_audio_time
 
     def audio_thread_func(self):
         try:
@@ -1028,12 +1027,16 @@ class SBSVideoPlayer:
                     time.sleep(0.01)
                     continue
                 
-                for frame in packet.decode():
-                    resampled_frames = resampler.resample(frame)
-                    for r in resampled_frames:
-                        data = r.to_ndarray()
-                        interleaved = np.ascontiguousarray(data.T)
-                        self.audio_queue.put(interleaved)
+                try:
+                    decoded_frames = packet.decode()
+                    for frame in decoded_frames:
+                        resampled_frames = resampler.resample(frame)
+                        for r in resampled_frames:
+                            data = r.to_ndarray()
+                            interleaved = np.ascontiguousarray(data.T)
+                            self.audio_queue.put(interleaved)
+                except Exception:
+                    pass
                         
             self.sd_stream.stop()
             self.sd_stream.close()
@@ -1496,6 +1499,9 @@ class SBSPlayerGUI(QMainWindow):
                         continue
                 else:
                     break # Queue empty, nothing to do
+
+            if not self.player.has_audio:
+                break
 
             # Check if this frame is due
             video_time = self.current_gui_ts / 1000.0
