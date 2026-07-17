@@ -1347,6 +1347,7 @@ class SBSPlayerGUI(QMainWindow):
         self.setWindowTitle("Nightfall Player")
         self.resize(1200, 800)
         self.is_seeking = False
+        self._seek_setting = False
         self.prev_volume = 100
         self.fullscreen_mode = False
         
@@ -1685,8 +1686,8 @@ class SBSPlayerGUI(QMainWindow):
         self.seek_slider.setObjectName("seek_slider")
         self.seek_slider.setRange(0, int(self.player.duration_sec))
         self.seek_slider.sliderPressed.connect(self.on_seek_press)
-        self.seek_slider.sliderMoved.connect(self.on_seek_slider_moved)
         self.seek_slider.sliderReleased.connect(self.on_seek_release)
+        self.seek_slider.valueChanged.connect(self.on_seek_value_changed)
         playback_layout.addWidget(self.seek_slider)
 
         controls_layout = QHBoxLayout()
@@ -1819,7 +1820,9 @@ class SBSPlayerGUI(QMainWindow):
             if len(self.playlist) > 1:
                 self.on_playlist_next()
             else:
+                self._seek_setting = True
                 self.seek_slider.setValue(0)
+                self._seek_setting = False
                 self.player.seek_video_target = 0
                 self.player.seek_audio_target = 0
                 self.player.play = True
@@ -1918,7 +1921,9 @@ class SBSPlayerGUI(QMainWindow):
             
             if not self.is_seeking:
                 current_time = timestamp_ms / 1000.0
+                self._seek_setting = True
                 self.seek_slider.setValue(int(current_time))
+                self._seek_setting = False
                 self.time_label.setText(f"{self.format_time(current_time)} / {self.format_time(self.player.duration_sec)}")
             
             # Show stats (rate-limited to 2 Hz)
@@ -2097,9 +2102,11 @@ class SBSPlayerGUI(QMainWindow):
     def on_seek_press(self):
         self.is_seeking = True
 
-    def on_seek_slider_moved(self, pos):
+    def on_seek_value_changed(self, value):
+        if self._seek_setting:
+            return
         self.is_seeking = True
-        self.time_label.setText(f"{self.format_time(pos)} / {self.format_time(self.player.duration_sec)}")
+        self.time_label.setText(f"{self.format_time(value)} / {self.format_time(self.player.duration_sec)}")
 
     def on_seek_release(self):
         target = self.seek_slider.value()
@@ -2115,7 +2122,9 @@ class SBSPlayerGUI(QMainWindow):
         self.player._seek_accept_behind = True
         self.current_gui_frame = None
         self.current_gui_ts = None
+        self._seek_setting = True
         self.seek_slider.setValue(int(target))
+        self._seek_setting = False
         self.time_label.setText(f"{self.format_time(target)} / {self.format_time(self.player.duration_sec)}")
         self.is_seeking = False
 
@@ -2181,7 +2190,9 @@ class SBSPlayerGUI(QMainWindow):
             self._run_rife_build()
         
         self.seek_slider.setRange(0, int(self.player.duration_sec))
+        self._seek_setting = True
         self.seek_slider.setValue(0)
+        self._seek_setting = False
         self.play_button.setText("Pause")
         
         self.player.start_threads()
