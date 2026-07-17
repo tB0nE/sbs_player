@@ -111,6 +111,7 @@ class SBSVideoPlayer:
         self.model_name = model_name
         self.use_trt = use_trt and (model_name in V2_MODELS)
         self.is_da3 = model_name in DA3_MODELS
+        self.volume = 1.0
         self.load_config()
 
         # CLI args override persisted config
@@ -159,7 +160,6 @@ class SBSVideoPlayer:
         self.seek_audio_target = None
         self.seek_video_target = None
         self.has_audio = False
-        self.volume = 1.0
         self.sys_clock_start = time.time()
         self.sys_clock_pause_time = time.time()
         self._last_valid_audio_time = 0.0
@@ -413,6 +413,7 @@ class SBSVideoPlayer:
             print("[Info] TRT engine built and loaded.")
 
         self.trt_context = self.trt_engine.create_execution_context()
+        self.trt_stream = torch.cuda.Stream()
 
         # Inspect engine I/O tensor metadata and allocate matching buffers
         import tensorrt as trt
@@ -756,7 +757,7 @@ class SBSVideoPlayer:
             # Pre-shrink on CPU before H2D: resize BGR to model resolution
             small_frame = cv2.resize(frame, (self.inference_size, self.inference_size), interpolation=cv2.INTER_LINEAR)
             frame_gpu = torch.from_numpy(small_frame).to(self.device, non_blocking=True)
-            frame_gpu = frame_gpu.permute(2, 0, 1).unsqueeze(0).to(dtype=torch.float16)
+            frame_gpu = frame_gpu.permute(2, 0, 1).unsqueeze(0).to(dtype=self.trt_d_input.dtype)
             frame_gpu = frame_gpu.flip(1)  # BGR -> RGB
 
             # Normalize directly into pre-allocated TRT input buffer
@@ -765,11 +766,13 @@ class SBSVideoPlayer:
 
             self.last_preprocess_ms = (time.perf_counter() - t0) * 1000.0
 
-            pre_done = torch.cuda.Event()
+            pre_done = torch.cuda.Event(enable_timing=True)
             pre_done.record()
-            self.trt_context.execute_async_v3(stream_handle=0)
-            infer_done = torch.cuda.Event()
-            infer_done.record()
+            self.trt_stream.wait_event(pre_done)
+            with torch.cuda.stream(self.trt_stream):
+                self.trt_context.execute_async_v3(stream_handle=self.trt_stream.cuda_stream)
+                infer_done = torch.cuda.Event(enable_timing=True)
+                infer_done.record(self.trt_stream)
             infer_done.synchronize()
             self.last_model_ms = pre_done.elapsed_time(infer_done)
 
