@@ -1508,9 +1508,6 @@ class SBSPlayerGUI(QMainWindow):
             }
         """)
 
-        # Set object names for QSS targeting
-        self.settings_widget.setObjectName("settings_widget")
-
         # Menu
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -1525,6 +1522,7 @@ class SBSPlayerGUI(QMainWindow):
 
         # Settings Panel (Left)
         self.settings_widget = QWidget()
+        self.settings_widget.setObjectName("settings_widget")
         settings_layout = QVBoxLayout(self.settings_widget)
         settings_layout.setContentsMargins(4, 4, 4, 4)
         settings_layout.setSpacing(8)
