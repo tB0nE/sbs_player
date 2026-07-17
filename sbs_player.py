@@ -355,11 +355,11 @@ class SBSVideoPlayer:
                 print(f"[Error] Please download the ONNX model manually:")
                 print(f"[Error]   Place it at: {self.onnx_path}")
                 print(f"[Error]   Or run: pip install transformers && re-launch the app")
-                sys.exit(1)
+                raise RuntimeError("ONNX model not found and transformers not installed")
             except Exception as e:
                 print(f"[Error] Failed to export ONNX model: {e}")
                 print(f"[Error] Please download the ONNX model manually to: {self.onnx_path}")
-                sys.exit(1)
+                raise RuntimeError(f"Failed to export ONNX model: {e}")
 
         import tensorrt as trt
         self.trt_logger = trt.Logger(trt.Logger.WARNING)
@@ -740,15 +740,14 @@ class SBSVideoPlayer:
 
     def _depth_loop_trt(self):
         while self.running:
-            if self.frame_queue.empty():
-                time.sleep(0.001)
+            try:
+                frame, timestamp_ms, entry_time, epoch = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
             if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
-
-            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
             if epoch != self.seek_epoch:
                 continue
             h, w = frame.shape[:2]
@@ -797,15 +796,14 @@ class SBSVideoPlayer:
 
     def _depth_loop_pytorch(self):
         while self.running:
-            if self.frame_queue.empty():
-                time.sleep(0.001)
+            try:
+                frame, timestamp_ms, entry_time, epoch = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
             if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
-
-            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
             if epoch != self.seek_epoch:
                 continue
             h, w = frame.shape[:2]
@@ -849,15 +847,14 @@ class SBSVideoPlayer:
 
     def _depth_loop_da3(self):
         while self.running:
-            if self.frame_queue.empty():
-                time.sleep(0.001)
+            try:
+                frame, timestamp_ms, entry_time, epoch = self.frame_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
             if self._reset_temporal_depth:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
-
-            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
             if epoch != self.seek_epoch:
                 continue
             h, w = frame.shape[:2]
@@ -896,16 +893,15 @@ class SBSVideoPlayer:
 
     def warp_thread(self):
         while self.running:
-            if self.depth_queue.empty():
-                time.sleep(0.001)
+            try:
+                frame, normalized_depth, timestamp_ms, entry_time, epoch = self.depth_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
             if self._reset_temporal_warp:
                 self.last_sbs_frame = None
                 self.last_timestamp_ms = None
                 self._reset_temporal_warp = False
-
-            frame, normalized_depth, timestamp_ms, entry_time, epoch = self.depth_queue.get()
             if epoch != self.seek_epoch:
                 continue
             h, w = frame.shape[:2]
