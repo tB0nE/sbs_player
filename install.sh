@@ -17,6 +17,14 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+MODEL_ARG="${1:-}"
+if [ -n "$MODEL_ARG" ]; then
+    case "$MODEL_ARG" in
+        small|base|large|skip) ;;
+        *) MODEL_ARG="" ;;
+    esac
+fi
+
 banner() { echo -e "${CYAN}==>${NC} $*"; }
 ok()     { echo -e "${GREEN}  ✓${NC} $*"; }
 warn()   { echo -e "${YELLOW}  !${NC} $*"; }
@@ -61,23 +69,27 @@ banner "Upgrading pip"
 
 # ── Install dependencies ───────────────────────────────────
 banner "Installing PyTorch (CUDA 12)..."
-"$PIP" install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --quiet
+"$PIP" install "torch>=2.1" "torchvision>=0.16" --index-url https://download.pytorch.org/whl/cu128 --quiet
 
 banner "Installing TensorRT..."
-"$PIP" install tensorrt tensorrt-cu12 tensorrt-cu12-libs \
-    nvidia-cudnn-cu12 nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 \
-    nvidia-curand-cu12 nvidia-cufft-cu12 nvidia-cuda-nvrtc-cu12 \
+"$PIP" install "tensorrt>=10" "tensorrt-cu12>=10" "tensorrt-cu12-libs>=10" \
+    "nvidia-cudnn-cu12>=9" "nvidia-cublas-cu12" "nvidia-cuda-runtime-cu12" \
+    "nvidia-curand-cu12" "nvidia-cufft-cu12" "nvidia-cuda-nvrtc-cu12" \
     --quiet
 
 banner "Installing application dependencies..."
 "$PIP" install \
-    numpy \
-    opencv-python \
-    av \
+    "numpy>=1.26" \
+    "opencv-python>=4.10" \
+    "av>=12" \
     "PySide6>=6.5" \
-    sounddevice \
-    nvidia-ml-py \
+    "sounddevice>=0.4" \
+    "nvidia-ml-py>=12" \
     --quiet
+
+banner "Installing optional dependencies (PyTorch/DA3 fallback)..."
+"$PIP" install "transformers>=4.40" --quiet || warn "transformers install failed (--no-trt fallback won't work)"
+"$PIP" install "depth_anything_3" --quiet 2>/dev/null || warn "DA3 model support not available (pip install depth_anything_3 manually if needed)"
 
 # ── Download app code ──────────────────────────────────────
 banner "Downloading sbs_player.py..."
@@ -85,14 +97,25 @@ curl -fsSL "$APP_URL" -o "$INSTALL_DIR/sbs_player.py" || err "Failed to download
 ok "App code downloaded"
 
 # ── Download ONNX model ────────────────────────────────────
-echo ""
-echo "Select model to download:"
-echo "  1) Small  (~50MB,  fastest)"
-echo "  2) Base   (~200MB, balanced)"
-echo "  3) Large  (~400MB, best quality, recommended)"
-echo "  4) Skip   (I already have models)"
-read -r -p "Choice [3]: " MODEL_CHOICE
-MODEL_CHOICE=${MODEL_CHOICE:-3}
+if [ -n "$MODEL_ARG" ]; then
+    # Non-interactive mode (CLI arg or NIGHTFALL_MODEL env var)
+    MODEL_CHOICE="$MODEL_ARG"
+elif [ -n "${NIGHTFALL_MODEL:-}" ]; then
+    MODEL_CHOICE="${NIGHTFALL_MODEL}"
+elif [ -t 0 ]; then
+    echo ""
+    echo "Select model to download:"
+    echo "  1) Small  (~50MB,  fastest)"
+    echo "  2) Base   (~200MB, balanced, recommended)"
+    echo "  3) Large  (~400MB, best quality)"
+    echo "  4) Skip   (I already have models)"
+    read -r -p "Choice [2]: " MODEL_CHOICE
+    MODEL_CHOICE=${MODEL_CHOICE:-2}
+else
+    # Piped install, default to Base
+    MODEL_CHOICE="2"
+    echo "[Info] Non-interactive install, defaulting to Base model"
+fi
 
 case "$MODEL_CHOICE" in
     1) MODEL_NAME="Depth-Anything-V2-Small-hf"; MODEL_SIZE="50MB" ;;
@@ -120,11 +143,12 @@ fi
 
 # ── Create launcher script ─────────────────────────────────
 banner "Creating launcher script..."
-cat > "$INSTALL_DIR/sbs_player" << 'LAUNCHER'
+cat > "$INSTALL_DIR/sbs_player" << LAUNCHER
 #!/usr/bin/env bash
-INSTALL_DIR="$HOME/sbs_player"
-export LD_LIBRARY_PATH="$INSTALL_DIR/venv/lib/python3.12/site-packages/tensorrt_libs:$INSTALL_DIR/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:$INSTALL_DIR/venv/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:$INSTALL_DIR/venv/lib/python3.12/site-packages/nvidia/cublas/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-exec "$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/sbs_player.py" "$@"
+INSTALL_DIR="\$HOME/sbs_player"
+PYVER=\$("\$INSTALL_DIR/venv/bin/python" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+export LD_LIBRARY_PATH="\$INSTALL_DIR/venv/lib/python\${PYVER}/site-packages/tensorrt_libs:\$INSTALL_DIR/venv/lib/python\${PYVER}/site-packages/nvidia/cudnn/lib:\$INSTALL_DIR/venv/lib/python\${PYVER}/site-packages/nvidia/cuda_runtime/lib:\$INSTALL_DIR/venv/lib/python\${PYVER}/site-packages/nvidia/cublas/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+exec "\$INSTALL_DIR/venv/bin/python" "\$INSTALL_DIR/sbs_player.py" "\$@"
 LAUNCHER
 
 chmod +x "$INSTALL_DIR/sbs_player"
