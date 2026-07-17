@@ -2102,8 +2102,8 @@ class SBSPlayerGUI(QMainWindow):
         self.time_label.setText(f"{self.format_time(pos)} / {self.format_time(self.player.duration_sec)}")
 
     def on_seek_release(self):
-        self.is_seeking = False
         target = self.seek_slider.value()
+        self.is_seeking = True
         print(f"[Seek] target={target:.1f}s")
         self.player.play = True
         self.play_button.setText("Pause")
@@ -2117,6 +2117,7 @@ class SBSPlayerGUI(QMainWindow):
         self.current_gui_ts = None
         self.seek_slider.setValue(int(target))
         self.time_label.setText(f"{self.format_time(target)} / {self.format_time(self.player.duration_sec)}")
+        self.is_seeking = False
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
