@@ -166,22 +166,50 @@ class SBSVideoPlayer:
         self.use_sharpen = True
         self.hq_artifact_smoothing = False
         self.use_frame_doubler = False
+
+        self.pipeline_latency = 0.5
+        self.latency_alpha = 0.05
+        self.seek_epoch = 0
+        self._seek_accept_behind = False
+
         self.last_sbs_frame = None
         self.last_timestamp_ms = None
         self.last_padded_tensor = None
         self.rife_context = None
         self.rife_engine = None
 
-        # Load video metadata
-        cap = cv2.VideoCapture(self.video_path)
-        self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.video_fps = cap.get(cv2.CAP_PROP_FPS)
-        if self.video_fps <= 0:
-            self.video_fps = 24.0
-        self.duration_sec = self.total_frames / self.video_fps
-        self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
+        # Load video metadata (try av first for HEVC support, fall back to cv2)
+        try:
+            container = av.open(self.video_path)
+            vid = container.streams.video[0]
+            self.total_frames = vid.frames if vid.frames else 0
+            self.video_fps = float(vid.average_rate) if vid.average_rate else 0.0
+            if self.video_fps <= 0:
+                self.video_fps = float(vid.guessed_rate) if vid.guessed_rate else 24.0
+            if vid.duration:
+                self.duration_sec = float(vid.duration * vid.time_base)
+            elif container.duration:
+                self.duration_sec = float(container.duration / av.time_base)
+            elif self.total_frames > 0 and self.video_fps > 0:
+                self.duration_sec = self.total_frames / self.video_fps
+            else:
+                self.duration_sec = 0.0
+            if self.total_frames == 0 and self.duration_sec > 0:
+                self.total_frames = int(self.duration_sec * self.video_fps)
+            self.width = vid.width
+            self.height = vid.height
+            container.close()
+            print(f"[Info] Video metadata (av): {self.width}x{self.height} @ {self.video_fps:.2f}fps, {self.total_frames} frames")
+        except Exception:
+            cap = cv2.VideoCapture(self.video_path)
+            self.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if self.video_fps <= 0:
+                self.video_fps = 24.0
+            self.duration_sec = self.total_frames / self.video_fps
+            self.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
 
         # Load config
         self.load_config()
@@ -459,6 +487,99 @@ class SBSVideoPlayer:
             except queue.Empty: break
 
     def video_reader_thread(self):
+        try:
+            self._video_reader_av()
+            return
+        except Exception as e:
+            print(f"[Warning] PyAV reader failed ({e}), falling back to OpenCV reader.")
+
+        self._video_reader_cv2()
+
+    def _video_reader_av(self):
+        container = av.open(self.video_path)
+        video_stream = container.streams.video[0]
+        avg_rate = float(video_stream.average_rate) if video_stream.average_rate else 0.0
+        if avg_rate <= 0:
+            avg_rate = float(video_stream.guessed_rate) if video_stream.guessed_rate else 30.0
+        self.video_fps = avg_rate
+        time_base_sec = float(video_stream.time_base)
+
+        print(f"[Info] PyAV reader: {video_stream.codec_context.codec.name} ({video_stream.width}x{video_stream.height} @ {self.video_fps:.2f}fps)")
+
+        frame_interval = 1.0 / self.video_fps if not self.benchmark else 0.0
+        last_read_time = 0.0
+        first_frame = True
+        demuxer = container.demux(video_stream)
+
+        while self.running:
+            if self.seek_video_target is not None:
+                self.seek_epoch += 1
+                target_offset = int(self.seek_video_target * av.time_base)
+                print(f"[Seek] AV reader seeking to {self.seek_video_target:.1f}s (offset={target_offset})")
+                try:
+                    container.seek(target_offset, backward=True)
+                except Exception as e:
+                    print(f"[Error] AV seek failed: {e}")
+                self.flush_queues()
+                self.seek_video_target = None
+                first_frame = True
+                demuxer = container.demux(video_stream)
+
+            if not self.play:
+                time.sleep(0.05)
+                continue
+
+            if self.frame_queue.full():
+                time.sleep(0.01)
+                continue
+
+            now = time.monotonic()
+            if not first_frame and frame_interval > 0:
+                elapsed = now - last_read_time
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+                    now = time.monotonic()
+
+            try:
+                packet = next(demuxer)
+            except StopIteration:
+                if self.loop_video:
+                    container.seek(0, stream=video_stream, backward=True)
+                    demuxer = container.demux(video_stream)
+                    self.reset_temporal = True
+                    self.seek_audio_target = 0.0
+                    first_frame = True
+                    continue
+                else:
+                    self.video_ended = True
+                    self.play = False
+                    continue
+            except Exception:
+                time.sleep(0.01)
+                continue
+
+            try:
+                for frame in packet.decode():
+                    frame_np = frame.to_ndarray(format='bgr24')
+                    if frame.pts is not None:
+                        timestamp_ms = float(frame.pts * video_stream.time_base * 1000)
+                    elif frame.time is not None:
+                        timestamp_ms = frame.time * 1000.0
+                    else:
+                        timestamp_ms = 0.0
+
+                    entry_time = time.time()
+                    self.frame_queue.put((frame_np, timestamp_ms, entry_time, self.seek_epoch))
+                    last_read_time = now
+                    if first_frame:
+                        print(f"[Seek] AV reader produced first post-seek frame: ts={timestamp_ms:.0f}ms epoch={self.seek_epoch}")
+                    first_frame = False
+            except Exception:
+                continue
+
+        container.close()
+
+    def _video_reader_cv2(self):
         cap = cv2.VideoCapture(self.video_path)
         if not cap.isOpened():
             print(f"[Error] Could not open video file: {self.video_path}")
@@ -468,15 +589,17 @@ class SBSVideoPlayer:
         self.video_fps = cap.get(cv2.CAP_PROP_FPS)
         if self.video_fps <= 0:
             self.video_fps = 30.0
-        print(f"[Info] Input Video FPS: {self.video_fps}")
+        print(f"[Info] OpenCV reader (FPS: {self.video_fps})")
 
         frame_interval = 1.0 / self.video_fps if not self.benchmark else 0.0
         last_read_time = 0.0
 
         while self.running:
             if self.seek_video_target is not None:
+                self.seek_epoch += 1
                 cap.set(cv2.CAP_PROP_POS_MSEC, self.seek_video_target * 1000.0)
                 self.flush_queues()
+                self.reset_temporal = True
                 self.seek_video_target = None
 
             if not self.play:
@@ -507,7 +630,8 @@ class SBSVideoPlayer:
                 continue
 
             timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
-            self.frame_queue.put((frame, timestamp_ms))
+            entry_time = time.time()
+            self.frame_queue.put((frame, timestamp_ms, entry_time, self.seek_epoch))
 
         cap.release()
 
@@ -529,7 +653,9 @@ class SBSVideoPlayer:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
 
-            frame, timestamp_ms = self.frame_queue.get()
+            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
+            if epoch != self.seek_epoch:
+                continue
             h, w = frame.shape[:2]
 
             t0 = time.perf_counter()
@@ -572,7 +698,7 @@ class SBSVideoPlayer:
             self.last_postprocess_ms = (time.perf_counter() - t2) * 1000.0
             self.last_inference_ms = (time.perf_counter() - t0) * 1000.0
 
-            self.depth_queue.put((frame, normalized_depth, timestamp_ms))
+            self.depth_queue.put((frame, normalized_depth, timestamp_ms, entry_time, epoch))
 
     def _depth_loop_pytorch(self):
         while self.running:
@@ -584,7 +710,9 @@ class SBSVideoPlayer:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
 
-            frame, timestamp_ms = self.frame_queue.get()
+            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
+            if epoch != self.seek_epoch:
+                continue
             h, w = frame.shape[:2]
 
             t0 = time.perf_counter()
@@ -622,7 +750,7 @@ class SBSVideoPlayer:
                 normalized_depth = np.zeros_like(prediction)
             self.last_inference_ms = (time.perf_counter() - t0) * 1000.0
 
-            self.depth_queue.put((frame, normalized_depth, timestamp_ms))
+            self.depth_queue.put((frame, normalized_depth, timestamp_ms, entry_time, epoch))
 
     def _depth_loop_da3(self):
         while self.running:
@@ -634,12 +762,13 @@ class SBSVideoPlayer:
                 self.prev_depth_gpu = None
                 self._reset_temporal_depth = False
 
-            frame, timestamp_ms = self.frame_queue.get()
+            frame, timestamp_ms, entry_time, epoch = self.frame_queue.get()
+            if epoch != self.seek_epoch:
+                continue
             h, w = frame.shape[:2]
 
             t0 = time.perf_counter()
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
             use_autocast = self.precision == "fp16" and torch.cuda.is_available()
             with torch.inference_mode(), torch.autocast('cuda', dtype=torch.float16, enabled=use_autocast):
                 prediction = self.da3_model.inference(
@@ -668,7 +797,7 @@ class SBSVideoPlayer:
                 normalized_depth = np.zeros_like(depth_map)
             self.last_inference_ms = (time.perf_counter() - t0) * 1000.0
 
-            self.depth_queue.put((frame, normalized_depth, timestamp_ms))
+            self.depth_queue.put((frame, normalized_depth, timestamp_ms, entry_time, epoch))
 
     def warp_thread(self):
         while self.running:
@@ -681,7 +810,9 @@ class SBSVideoPlayer:
                 self.last_timestamp_ms = None
                 self._reset_temporal_warp = False
 
-            frame, normalized_depth, timestamp_ms = self.depth_queue.get()
+            frame, normalized_depth, timestamp_ms, entry_time, epoch = self.depth_queue.get()
+            if epoch != self.seek_epoch:
+                continue
             h, w = frame.shape[:2]
 
             tw = time.perf_counter()
@@ -691,6 +822,9 @@ class SBSVideoPlayer:
             right_half = cv2.resize(right_eye, (w // 2, h))
             sbs_frame = np.hstack((left_half, right_half))
             self.last_warp_ms = (time.perf_counter() - tw) * 1000.0
+
+            latency = time.time() - entry_time
+            self.pipeline_latency = (1 - self.latency_alpha) * self.pipeline_latency + self.latency_alpha * latency
 
             if self.use_frame_doubler:
                 if self.last_sbs_frame is not None and self.last_timestamp_ms is not None:
@@ -726,15 +860,15 @@ class SBSVideoPlayer:
                         inter_frame = cv2.addWeighted(self.last_sbs_frame, 0.5, sbs_frame, 0.5, 0)
                         
                     inter_timestamp = (self.last_timestamp_ms + timestamp_ms) / 2.0
-                    self.sbs_queue.put((inter_frame, inter_timestamp))
+                    self.sbs_queue.put((inter_frame, inter_timestamp, epoch))
                 
-                self.sbs_queue.put((sbs_frame, timestamp_ms))
+                self.sbs_queue.put((sbs_frame, timestamp_ms, epoch))
                 self.last_sbs_frame = sbs_frame.copy()
                 self.last_timestamp_ms = timestamp_ms
             else:
                 self.last_sbs_frame = None
                 self.last_timestamp_ms = None
-                self.sbs_queue.put((sbs_frame, timestamp_ms))
+                self.sbs_queue.put((sbs_frame, timestamp_ms, epoch))
 
     def warp_right_eye(self, frame, depth):
         h, w, c = frame.shape
@@ -941,10 +1075,17 @@ class SBSVideoPlayer:
         reader.start()
         processor.start()
         warper.start()
-        audio.start()
 
-        print("[Info] Buffering frames...")
-        time.sleep(2.0)
+        print("[Info] Priming pipeline...")
+        t0 = time.time()
+        while self.sbs_queue.empty() and self.running:
+            time.sleep(0.05)
+            if time.time() - t0 > 10.0:
+                print("[Warning] Pipeline priming timed out, starting audio anyway.")
+                break
+
+        audio.start()
+        print(f"[Info] Audio started (pipeline latency: {self.pipeline_latency:.3f}s)")
 
     def run_display_loop(self):
         window_name = "2D to 3D SBS Player"
@@ -973,7 +1114,7 @@ class SBSVideoPlayer:
 
         while self.running:
             if not self.sbs_queue.empty():
-                sbs_frame, timestamp_ms = self.sbs_queue.get()
+                sbs_frame, timestamp_ms = self.sbs_queue.get()[0:2]
 
                 now = time.time()
                 self.fps_history.append(now)
@@ -1015,8 +1156,10 @@ class SBSVideoPlayer:
                 else:
                     audio_time = self.get_audio_time()
                     video_time = timestamp_ms / 1000.0
-                    time_diff = video_time - audio_time
-                    delay = max(1, int(time_diff * 1000.0))
+                    if video_time < audio_time - self.pipeline_latency - 0.015:
+                        delay = 1  # far behind, display immediately
+                    else:
+                        delay = max(1, int((video_time - audio_time) * 1000.0))
 
                 key = cv2.waitKey(delay) & 0xFF
                 if key == ord('q') or key == 27:
@@ -1125,7 +1268,8 @@ class SBSPlayerGUI(QMainWindow):
         # Frame timer
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(8) # ~120fps poll rate
+        self.timer.setSingleShot(True)
+        self.timer.start(16)
 
     def init_ui(self):
         # Menu
@@ -1330,24 +1474,63 @@ class SBSPlayerGUI(QMainWindow):
             # If we don't have a frame cached, get one
             if self.current_gui_frame is None:
                 if not self.player.sbs_queue.empty():
-                    self.current_gui_frame, self.current_gui_ts = self.player.sbs_queue.get()
+                    sbs_tuple = self.player.sbs_queue.get()
+                    self.current_gui_frame, self.current_gui_ts = sbs_tuple[0], sbs_tuple[1]
+                    if len(sbs_tuple) > 2 and sbs_tuple[2] != self.player.seek_epoch:
+                        print(f"[Seek] GUI discarding frame with stale epoch {sbs_tuple[2]} (current: {self.player.seek_epoch})")
+                        self.current_gui_frame = None
+                        self.current_gui_ts = None
+                        continue
                 else:
                     break # Queue empty, nothing to do
 
             # Check if this frame is due
             video_time = self.current_gui_ts / 1000.0
-            
+            behind_tolerance = self.player.pipeline_latency + 0.015
+
+            if self.player._seek_accept_behind:
+                if video_time >= audio_time - behind_tolerance:
+                    self.player._seek_accept_behind = False
+                if video_time > audio_time + 0.015:
+                    self.timer.start(16)
+                    return
+                if video_time < audio_time - behind_tolerance:
+                    if not self.player.sbs_queue.empty():
+                        sbs_tuple = self.player.sbs_queue.get()
+                        self.current_gui_frame, self.current_gui_ts = sbs_tuple[0], sbs_tuple[1]
+                        if len(sbs_tuple) > 2 and sbs_tuple[2] != self.player.seek_epoch:
+                            self.current_gui_frame = None
+                            self.current_gui_ts = None
+                        continue
+                break
+
             # If there's another frame in the queue, check if that one is also in the past.
             # If the next frame is also due (meaning we are behind), we drop the current one and get the next.
-            if video_time < audio_time - 0.015: # 15ms threshold to allow slight tolerance
+            if video_time < audio_time - behind_tolerance:
                 if not self.player.sbs_queue.empty():
                     # Drop current frame, get next one
-                    self.current_gui_frame, self.current_gui_ts = self.player.sbs_queue.get()
+                    sbs_tuple = self.player.sbs_queue.get()
+                    self.current_gui_frame, self.current_gui_ts = sbs_tuple[0], sbs_tuple[1]
+                    if len(sbs_tuple) > 2 and sbs_tuple[2] != self.player.seek_epoch:
+                        print(f"[Seek] GUI dropping stale frame epoch {sbs_tuple[2]} (current: {self.player.seek_epoch})")
+                        self.current_gui_frame = None
+                        self.current_gui_ts = None
                     continue
-            
+                else:
+                    # Discard stale frame entirely - nothing else available yet
+                    self.current_gui_frame = None
+                    self.current_gui_ts = None
+                    break
+
             # If the frame is in the future, we don't display it yet
             if video_time > audio_time + 0.015:
+                if video_time > audio_time + 5.0:
+                    # Frame is >5s ahead — stale from a backward seek, discard it
+                    self.current_gui_frame = None
+                    self.current_gui_ts = None
+                    continue
                 # Keep the frame cached, return to wait
+                self.timer.start(16)
                 return
 
             # Frame is within the display window, break and display it
@@ -1404,6 +1587,8 @@ class SBSPlayerGUI(QMainWindow):
                 Qt.KeepAspectRatio,
                 Qt.SmoothTransformation
             ))
+
+        self.timer.start(16)
 
     def format_time(self, sec):
         m = int(sec) // 60
@@ -1501,9 +1686,18 @@ class SBSPlayerGUI(QMainWindow):
     def on_seek_release(self):
         self.is_seeking = False
         target = self.seek_slider.value()
+        print(f"[Seek] target={target:.1f}s")
+        self.player.play = True
+        self.play_button.setText("Pause")
         self.player.seek_video_target = target
         self.player.seek_audio_target = target
         self.player.reset_temporal = True
+        self.player.flush_queues()
+        self.player._seek_accept_behind = True
+        self.current_gui_frame = None
+        self.current_gui_ts = None
+        self.seek_slider.setValue(int(target))
+        self.time_label.setText(f"{self.format_time(target)} / {self.format_time(self.player.duration_sec)}")
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
@@ -1525,15 +1719,36 @@ class SBSPlayerGUI(QMainWindow):
         self.player.reset_temporal = True
         
         # Refresh metadata
-        cap = cv2.VideoCapture(file_path)
-        self.player.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.player.video_fps = cap.get(cv2.CAP_PROP_FPS)
-        if self.player.video_fps <= 0:
-            self.player.video_fps = 24.0
-        self.player.duration_sec = self.player.total_frames / self.player.video_fps
-        self.player.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.player.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
+        try:
+            container = av.open(file_path)
+            vid = container.streams.video[0]
+            self.player.total_frames = vid.frames if vid.frames else 0
+            self.player.video_fps = float(vid.average_rate) if vid.average_rate else 0.0
+            if self.player.video_fps <= 0:
+                self.player.video_fps = float(vid.guessed_rate) if vid.guessed_rate else 24.0
+            if vid.duration:
+                self.player.duration_sec = float(vid.duration * vid.time_base)
+            elif container.duration:
+                self.player.duration_sec = float(container.duration / av.time_base)
+            elif self.player.total_frames > 0 and self.player.video_fps > 0:
+                self.player.duration_sec = self.player.total_frames / self.player.video_fps
+            else:
+                self.player.duration_sec = 0.0
+            if self.player.total_frames == 0 and self.player.duration_sec > 0:
+                self.player.total_frames = int(self.player.duration_sec * self.player.video_fps)
+            self.player.width = vid.width
+            self.player.height = vid.height
+            container.close()
+        except Exception:
+            cap = cv2.VideoCapture(file_path)
+            self.player.total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.player.video_fps = cap.get(cv2.CAP_PROP_FPS)
+            if self.player.video_fps <= 0:
+                self.player.video_fps = 24.0
+            self.player.duration_sec = self.player.total_frames / self.player.video_fps
+            self.player.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.player.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
         
         # Force re-compile RIFE if width/height changed and doubler is active
         if self.player.use_frame_doubler:

@@ -1,5 +1,7 @@
 __pycache__/
 checkpoints/
 *.mp4
+*.mkv
 *.onnx
 *.engine
+rust_sbs_player/
