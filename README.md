@@ -1,6 +1,6 @@
-# SBS 3D Player
+# Nightfall Player
 
-Convert any 2D video to side-by-side 3D in real time using AI depth estimation.
+Convert any 2D video to side-by-side 3D in real time using AI depth estimation — a companion app for the Nightfall streaming platform.
 
 Uses [Depth Anything V2](https://github.com/DepthAnything/Depth-Anything-V2) via [TensorRT](https://developer.nvidia.com/tensorrt) for GPU-accelerated inference on NVIDIA GPUs.
 

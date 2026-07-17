@@ -2,7 +2,6 @@
 import sys
 import os
 os.environ["OPENCV_VIDEO_DEBUG"] = "0"
-os.environ["QT_QPA_PLATFORM"] = "xcb"
 import time
 import queue
 import threading
@@ -1260,7 +1259,7 @@ class SBSPlayerGUI(QMainWindow):
     def __init__(self, player):
         super().__init__()
         self.player = player
-        self.setWindowTitle("2D to 3D SBS Player")
+        self.setWindowTitle("Nightfall Player")
         self.resize(1200, 800)
         self.is_seeking = False
         self.prev_volume = 100
@@ -1312,8 +1311,17 @@ class SBSPlayerGUI(QMainWindow):
         # Settings Panel (Left)
         self.settings_widget = QWidget()
         settings_layout = QVBoxLayout(self.settings_widget)
-        settings_layout.setAlignment(Qt.AlignTop)
-        settings_layout.setSpacing(10)
+        settings_layout.setContentsMargins(4, 4, 4, 4)
+        settings_layout.setSpacing(8)
+
+        settings_header = QHBoxLayout()
+        settings_header.addWidget(QLabel("<b>Settings</b>"))
+        settings_header.addStretch()
+        self.settings_toggle_btn = QPushButton("×")
+        self.settings_toggle_btn.setFixedSize(24, 24)
+        self.settings_toggle_btn.clicked.connect(self.toggle_settings)
+        settings_header.addWidget(self.settings_toggle_btn)
+        settings_layout.addLayout(settings_header)
 
         # Sliders
         self.shift_slider = self.create_slider(settings_layout, "Depth Strength", 0, 100, int(self.player.max_shift),
@@ -1378,30 +1386,10 @@ class SBSPlayerGUI(QMainWindow):
         self.doubler_checkbox.stateChanged.connect(self.on_doubler_changed)
         settings_layout.addWidget(self.doubler_checkbox)
 
-        # Playlist ListWidget
-        settings_layout.addWidget(QLabel("Playlist:"))
-        self.playlist_widget = QListWidget()
-        self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_double_click)
-        settings_layout.addWidget(self.playlist_widget)
-
-        # Playlist buttons (Add/Remove)
-        playlist_btns = QHBoxLayout()
-        self.add_btn = QPushButton("Add File")
-        self.add_btn.clicked.connect(self.on_playlist_add)
-        playlist_btns.addWidget(self.add_btn)
-
-        self.remove_btn = QPushButton("Remove")
-        self.remove_btn.clicked.connect(self.on_playlist_remove)
-        playlist_btns.addWidget(self.remove_btn)
-        settings_layout.addLayout(playlist_btns)
-
-        # Info Label (Stats)
-        self.stats_label = QLabel()
-        settings_layout.addWidget(self.stats_label)
-
         # Right Side (Video + Playback)
         right_widget = QWidget()
         right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
 
         # Video Label
         self.video_label = QLabel()
@@ -1438,6 +1426,14 @@ class SBSPlayerGUI(QMainWindow):
 
         controls_layout.addStretch()
 
+        self.playlist_toggle_controls_btn = QPushButton("Playlist ◂")
+        self.playlist_toggle_controls_btn.clicked.connect(self.toggle_playlist)
+        controls_layout.addWidget(self.playlist_toggle_controls_btn)
+
+        self.settings_toggle_controls_btn = QPushButton("Settings ▸")
+        self.settings_toggle_controls_btn.clicked.connect(self.toggle_settings)
+        controls_layout.addWidget(self.settings_toggle_controls_btn)
+
         self.mute_button = QPushButton("Mute")
         self.mute_button.clicked.connect(self.toggle_mute)
         controls_layout.addWidget(self.mute_button)
@@ -1452,10 +1448,46 @@ class SBSPlayerGUI(QMainWindow):
         playback_layout.addLayout(controls_layout)
         right_layout.addWidget(self.playback_widget)
 
+        # Playlist Panel (Right, collapsible)
+        self.playlist_panel = QWidget()
+        playlist_panel_layout = QVBoxLayout(self.playlist_panel)
+        playlist_panel_layout.setContentsMargins(4, 4, 4, 4)
+
+        playlist_header = QHBoxLayout()
+        playlist_header.addWidget(QLabel("<b>Playlist</b>"))
+        playlist_header.addStretch()
+        self.playlist_toggle_btn = QPushButton("×")
+        self.playlist_toggle_btn.setFixedSize(24, 24)
+        self.playlist_toggle_btn.clicked.connect(self.toggle_playlist)
+        playlist_header.addWidget(self.playlist_toggle_btn)
+        playlist_panel_layout.addLayout(playlist_header)
+
+        self.playlist_widget = QListWidget()
+        self.playlist_widget.itemDoubleClicked.connect(self.on_playlist_double_click)
+        playlist_panel_layout.addWidget(self.playlist_widget)
+
+        playlist_btns = QHBoxLayout()
+        self.add_btn = QPushButton("Add File")
+        self.add_btn.clicked.connect(self.on_playlist_add)
+        playlist_btns.addWidget(self.add_btn)
+        self.remove_btn = QPushButton("Remove")
+        self.remove_btn.clicked.connect(self.on_playlist_remove)
+        playlist_btns.addWidget(self.remove_btn)
+        playlist_panel_layout.addLayout(playlist_btns)
+
+        self.stats_label = QLabel()
+        playlist_panel_layout.addWidget(self.stats_label)
+
         # Add to splitter
         splitter.addWidget(self.settings_widget)
         splitter.addWidget(right_widget)
-        splitter.setSizes([300, 900])
+        splitter.addWidget(self.playlist_panel)
+        splitter.setSizes([300, 650, 250])
+
+        # Initial state: settings hidden, playlist shown
+        self.settings_widget.hide()
+        self.settings_toggle_btn.setText("«")
+        self.settings_toggle_controls_btn.setText("Settings ▸")
 
         # Enable Drag & Drop
         self.setAcceptDrops(True)
@@ -1639,6 +1671,26 @@ class SBSPlayerGUI(QMainWindow):
         else:
             self.player.sys_clock_start += time.time() - self.player.sys_clock_pause_time
             self.play_button.setText("Pause")
+
+    def toggle_playlist(self):
+        if self.playlist_panel.isVisible():
+            self.playlist_panel.hide()
+            self.playlist_toggle_btn.setText("«")
+            self.playlist_toggle_controls_btn.setText("Playlist ▸")
+        else:
+            self.playlist_panel.show()
+            self.playlist_toggle_btn.setText("×")
+            self.playlist_toggle_controls_btn.setText("Playlist ◂")
+
+    def toggle_settings(self):
+        if self.settings_widget.isVisible():
+            self.settings_widget.hide()
+            self.settings_toggle_btn.setText("«")
+            self.settings_toggle_controls_btn.setText("Settings ▸")
+        else:
+            self.settings_widget.show()
+            self.settings_toggle_btn.setText("×")
+            self.settings_toggle_controls_btn.setText("Settings ◂")
 
     def toggle_mute(self):
         if self.player.volume > 0:
@@ -1848,11 +1900,15 @@ class SBSPlayerGUI(QMainWindow):
         self.fullscreen_mode = not self.fullscreen_mode
         if self.fullscreen_mode:
             self.settings_widget.hide()
+            self.playlist_panel.hide()
             self.playback_widget.hide()
             self.menuBar().hide()
             self.showFullScreen()
         else:
-            self.settings_widget.show()
+            if self.settings_toggle_btn.text() == "×":
+                self.settings_widget.show()
+            if self.playlist_toggle_btn.text() == "×":
+                self.playlist_panel.show()
             self.playback_widget.show()
             self.menuBar().show()
             self.showNormal()

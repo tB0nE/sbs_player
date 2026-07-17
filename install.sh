@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# SBS 3D Player — Linux Installer
+# Nightfall Player — Linux Installer
 # Installs to ~/sbs_player/ with a dedicated Python venv
 # Creates start menu entry and file associations
 
@@ -23,7 +23,7 @@ warn()   { echo -e "${YELLOW}  !${NC} $*"; }
 err()    { echo -e "${RED}  ✗${NC} $*"; exit 1; }
 
 # ── Preflight ──────────────────────────────────────────────
-banner "SBS 3D Player Installer"
+banner "Nightfall Player Installer"
 
 if ! command -v python3 &>/dev/null; then
     err "python3 not found. Install Python 3.10+ first."
@@ -146,10 +146,10 @@ mkdir -p "$APPS_DIR"
 
 cat > "$APPS_DIR/sbs_player.desktop" << DESKTOP
 [Desktop Entry]
-Name=SBS 3D Player
-Comment=2D to 3D Side-by-Side Video Player using AI Depth Estimation
+Name=Nightfall Player
+Comment=AI-powered 2D to 3D video player
 Exec=$INSTALL_DIR/sbs_player %f
-Icon=video-x-generic
+Icon=nightfall-player
 Terminal=false
 Type=Application
 Categories=AudioVideo;Player;Video;
@@ -163,7 +163,7 @@ ok "Desktop entry created"
 # ── Done ──────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║  SBS 3D Player installed successfully!       ║${NC}"
+echo -e "${GREEN}║  Nightfall Player installed successfully!    ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 echo "  Location:   $INSTALL_DIR"
@@ -175,7 +175,7 @@ echo "  Usage:"
 echo "    $INSTALL_DIR/sbs_player video.mkv    Play a file"
 echo "    $INSTALL_DIR/sbs_player              Launch without video"
 echo ""
-echo "  Or find 'SBS 3D Player' in your application menu."
+echo "  Or find 'Nightfall Player' in your application menu."
 echo "  Double-click .mkv/.mp4 files to open them in the player."
 echo ""
 echo -e "  ${YELLOW}First run will build the TRT engine for your GPU (60-90s one-time).${NC}"
