@@ -599,14 +599,16 @@ class SBSVideoPlayer:
         while self.running:
             if self.seek_video_target is not None:
                 self.seek_epoch += 1
-                target_offset = int(self.seek_video_target * av.time_base)
-                print(f"[Seek] AV reader seeking to {self.seek_video_target:.1f}s (offset={target_offset})")
+                target_sec = self.seek_video_target
+                target_offset = int(target_sec * av.time_base)
+                print(f"[Seek] AV reader seeking to {target_sec:.1f}s (offset={target_offset})")
                 try:
                     container.seek(target_offset, backward=True)
                 except Exception as e:
                     print(f"[Error] AV seek failed: {e}")
                 self.flush_queues()
                 self.seek_video_target = None
+                self._seek_target_ms = target_sec * 1000.0
                 first_frame = True
                 demuxer = container.demux(video_stream)
 
@@ -653,6 +655,12 @@ class SBSVideoPlayer:
                         timestamp_ms = frame.time * 1000.0
                     else:
                         timestamp_ms = 0.0
+
+                    if hasattr(self, '_seek_target_ms') and timestamp_ms < self._seek_target_ms - 1.0:
+                        continue
+
+                    if hasattr(self, '_seek_target_ms'):
+                        del self._seek_target_ms
 
                     entry_time = time.time()
                     self.frame_queue.put((frame_np, timestamp_ms, entry_time, self.seek_epoch))
@@ -1082,7 +1090,8 @@ class SBSVideoPlayer:
             
             while self.running:
                 if self.seek_audio_target is not None:
-                    target_pts = int(self.seek_audio_target * av.time_base)
+                    target_sec = self.seek_audio_target
+                    target_pts = int(target_sec * av.time_base)
                     container.seek(target_pts)
                     while not self.audio_queue.empty():
                         try:
@@ -1090,7 +1099,8 @@ class SBSVideoPlayer:
                         except queue.Empty:
                             break
                     self.current_audio_data = np.zeros((0, 2), dtype=np.float32)
-                    self.audio_samples_played = int(self.seek_audio_target * self.audio_sample_rate)
+                    self.audio_samples_played = int(target_sec * self.audio_sample_rate)
+                    self._audio_seek_target_sec = target_sec
                     self.seek_audio_target = None
                 
                 if self.audio_queue.full():
@@ -1109,6 +1119,11 @@ class SBSVideoPlayer:
                 try:
                     decoded_frames = packet.decode()
                     for frame in decoded_frames:
+                        if hasattr(self, '_audio_seek_target_sec') and self._audio_seek_target_sec is not None:
+                            frame_sec = float(frame.pts * audio_stream.time_base) if frame.pts else 0.0
+                            if frame_sec + 0.1 < self._audio_seek_target_sec:
+                                continue
+                            self._audio_seek_target_sec = None
                         resampled_frames = resampler.resample(frame)
                         for r in resampled_frames:
                             data = r.to_ndarray()
