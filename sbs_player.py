@@ -1682,6 +1682,7 @@ class SBSPlayerGUI(QMainWindow):
         self.seek_slider.setObjectName("seek_slider")
         self.seek_slider.setSingleStep(1)
         self.seek_slider.setRange(0, int(self.player.duration_sec))
+        self.seek_slider.installEventFilter(self)
         self.seek_slider.sliderPressed.connect(self.on_seek_press)
         self.seek_slider.sliderReleased.connect(self.on_seek_release)
         self.seek_slider.valueChanged.connect(self.on_seek_value_changed)
@@ -2262,6 +2263,29 @@ class SBSPlayerGUI(QMainWindow):
                 self.playlist_panel.show()
             self.playback_widget.show()
             self.showNormal()
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+        if obj == self.seek_slider and event.type() == QEvent.MouseButtonPress:
+            opt = QStyleOptionSlider()
+            self.seek_slider.initStyleOption(opt)
+            handle_pos = QStyle.sliderPositionFromValue(
+                self.seek_slider.minimum(), self.seek_slider.maximum(),
+                self.seek_slider.value(), self.seek_slider.width(), opt.upsideDown
+            )
+            click_pos = int(event.position().x())
+            if abs(click_pos - handle_pos) > 12:
+                value = QStyle.sliderValueFromPosition(
+                    self.seek_slider.minimum(), self.seek_slider.maximum(),
+                    click_pos, self.seek_slider.width(), opt.upsideDown
+                )
+                self._seek_setting = True
+                self.seek_slider.setValue(int(value))
+                self._seek_setting = False
+                self._do_seek(value)
+                return True
+        return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event):
         key = event.key()
