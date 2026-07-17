@@ -1674,6 +1674,7 @@ class SBSPlayerGUI(QMainWindow):
         self.seek_slider.setObjectName("seek_slider")
         self.seek_slider.setRange(0, int(self.player.duration_sec))
         self.seek_slider.sliderPressed.connect(self.on_seek_press)
+        self.seek_slider.sliderMoved.connect(self.on_seek_slider_moved)
         self.seek_slider.sliderReleased.connect(self.on_seek_release)
         playback_layout.addWidget(self.seek_slider)
 
@@ -2084,6 +2085,10 @@ class SBSPlayerGUI(QMainWindow):
 
     def on_seek_press(self):
         self.is_seeking = True
+
+    def on_seek_slider_moved(self, pos):
+        self.is_seeking = True
+        self.time_label.setText(f"{self.format_time(pos)} / {self.format_time(self.player.duration_sec)}")
 
     def on_seek_release(self):
         self.is_seeking = False
