@@ -413,7 +413,6 @@ class SBSVideoPlayer:
             print("[Info] TRT engine built and loaded.")
 
         self.trt_context = self.trt_engine.create_execution_context()
-        self.trt_stream = torch.cuda.Stream()
 
         # Inspect engine I/O tensor metadata and allocate matching buffers
         import tensorrt as trt
@@ -766,11 +765,13 @@ class SBSVideoPlayer:
 
             self.last_preprocess_ms = (time.perf_counter() - t0) * 1000.0
 
-            t1 = time.perf_counter()
-            with torch.cuda.stream(self.trt_stream):
-                self.trt_context.execute_async_v3(stream_handle=self.trt_stream.cuda_stream)
-            self.trt_stream.synchronize()
-            self.last_model_ms = (time.perf_counter() - t1) * 1000.0
+            pre_done = torch.cuda.Event()
+            pre_done.record()
+            self.trt_context.execute_async_v3(stream_handle=0)
+            infer_done = torch.cuda.Event()
+            infer_done.record()
+            infer_done.synchronize()
+            self.last_model_ms = pre_done.elapsed_time(infer_done)
 
             t2 = time.perf_counter()
             depth = self.trt_d_output.clone()
@@ -783,11 +784,16 @@ class SBSVideoPlayer:
 
             # Download small depth map, upscale to full resolution on CPU
             depth_small = depth.float().cpu().numpy()
+            while depth_small.ndim > 2:
+                depth_small = depth_small.squeeze(0)
+            if depth_small.size == 0 or h == 0 or w == 0:
+                self.depth_queue.put((frame, np.zeros((h, w), dtype=np.float32), timestamp_ms, entry_time, epoch))
+                continue
             depth_min = depth_small.min()
             depth_max = depth_small.max()
             diff = depth_max - depth_min
             if diff > 0:
-                depth_norm_small = np.power((depth_small - depth_min) / diff, self.depth_gamma)
+                depth_norm_small = np.power((depth_small - depth_min) / diff, self.depth_gamma).astype(np.float32)
             else:
                 depth_norm_small = np.zeros((self.inference_size, self.inference_size), dtype=np.float32)
             normalized_depth = cv2.resize(depth_norm_small, (w, h), interpolation=cv2.INTER_LINEAR)
