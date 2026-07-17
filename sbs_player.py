@@ -149,6 +149,7 @@ class SBSVideoPlayer:
         self._reset_temporal_warp = False
         self.loop_video = False
         self.video_ended = False
+        self._reader_eof = False
 
         # Audio state
         self.current_audio_data = np.zeros((0, 2), dtype=np.float32)
@@ -631,11 +632,12 @@ class SBSVideoPlayer:
                     container.seek(0, stream=video_stream, backward=True)
                     demuxer = container.demux(video_stream)
                     self.reset_temporal = True
+                    self._reader_eof = False
                     self.seek_audio_target = 0.0
                     first_frame = True
                     continue
                 else:
-                    self.video_ended = True
+                    self._reader_eof = True
                     self.play = False
                     continue
             except Exception:
@@ -707,11 +709,12 @@ class SBSVideoPlayer:
                 if self.loop_video:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     self.reset_temporal = True
+                    self._reader_eof = False
                     self.seek_audio_target = 0.0
                 else:
-                    self.video_ended = True
+                    self._reader_eof = True
                     self.play = False
-                continue
+                    continue
 
             timestamp_ms = cap.get(cv2.CAP_PROP_POS_MSEC)
             entry_time = time.time()
@@ -1788,8 +1791,8 @@ class SBSPlayerGUI(QMainWindow):
         return slider
 
     def update_frame(self):
-        if self.player.video_ended:
-            self.player.video_ended = False
+        if self.player._reader_eof and self.player.frame_queue.empty() and self.player.depth_queue.empty() and self.player.sbs_queue.empty() and self.current_gui_frame is None:
+            self.player._reader_eof = False
             if len(self.playlist) > 1:
                 self.on_playlist_next()
             else:
@@ -2080,6 +2083,7 @@ class SBSPlayerGUI(QMainWindow):
         self.player.seek_video_target = target
         self.player.seek_audio_target = target
         self.player.reset_temporal = True
+        self.player._reader_eof = False
         self.player.flush_queues()
         self.player._seek_accept_behind = True
         self.current_gui_frame = None
@@ -2107,6 +2111,7 @@ class SBSPlayerGUI(QMainWindow):
         
         # Load new video
         self.player.video_path = file_path
+        self.player._reader_eof = False
         self.player.running = True
         self.player.play = True
         self.player.reset_temporal = True
