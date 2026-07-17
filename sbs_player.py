@@ -1348,9 +1348,6 @@ class SBSPlayerGUI(QMainWindow):
         self.resize(1200, 800)
         self.is_seeking = False
         self._seek_setting = False
-        self._seek_debounce_timer = QTimer(self)
-        self._seek_debounce_timer.setSingleShot(True)
-        self._seek_debounce_timer.timeout.connect(self._on_seek_debounced)
         self.prev_volume = 100
         self.fullscreen_mode = False
         
@@ -2109,12 +2106,13 @@ class SBSPlayerGUI(QMainWindow):
     def on_seek_value_changed(self, value):
         if self._seek_setting:
             return
-        self.is_seeking = True
-        self.time_label.setText(f"{self.format_time(value)} / {self.format_time(self.player.duration_sec)}")
-        self._seek_debounce_timer.start(150)
+        if not self.is_seeking:
+            self._do_seek(value)
+        else:
+            self.time_label.setText(f"{self.format_time(value)} / {self.format_time(self.player.duration_sec)}")
 
-    def _on_seek_debounced(self):
-        target = self.seek_slider.value()
+    def _do_seek(self, target):
+        self.is_seeking = True
         print(f"[Seek] target={target:.1f}s")
         self.player.play = True
         self.play_button.setText("Pause")
@@ -2133,8 +2131,8 @@ class SBSPlayerGUI(QMainWindow):
         self.is_seeking = False
 
     def on_seek_release(self):
-        self._seek_debounce_timer.stop()
-        self._on_seek_debounced()
+        if self.is_seeking:
+            self._do_seek(self.seek_slider.value())
 
     def open_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open Video", "", "Video Files (*.mp4 *.mkv *.avi *.mov)")
