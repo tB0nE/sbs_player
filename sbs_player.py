@@ -86,14 +86,10 @@ ALL_MODELS = V2_MODELS + DA3_MODELS
 class SBSVideoPlayer:
     def __init__(self, video_path, model_name="depth-anything/Depth-Anything-V2-Large-hf", max_shift=16, buffer_size=15, inference_size=518, precision="fp16", use_trt=True, benchmark=False, alpha=0.3, convergence=-10.0, edge_softness=20.0, depth_gamma=0.2, sharpen=14.0, artifact_smoothing=1.0):
         self.video_path = video_path
-        self.model_name = model_name
         self.max_shift = max_shift
         self.buffer_size = buffer_size
         self.inference_size = inference_size
         self.precision = precision
-        self.use_trt = use_trt and (model_name in V2_MODELS)
-        self.is_da3 = model_name in DA3_MODELS
-        self.video_fps = 30.0
         self.benchmark = benchmark
         self.alpha = alpha
         self.convergence = convergence
@@ -101,31 +97,43 @@ class SBSVideoPlayer:
         self.depth_gamma = depth_gamma
         self.sharpen = sharpen
         self.artifact_smoothing = artifact_smoothing
+        self.video_fps = 30.0
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[Info] Using device: {self.device}")
+
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.checkpoints_dir = os.path.join(self.script_dir, "checkpoints")
+        os.makedirs(self.checkpoints_dir, exist_ok=True)
+
+        # Load persisted config first, then apply CLI overrides
+        self.model_name = model_name
+        self.use_trt = use_trt and (model_name in V2_MODELS)
+        self.is_da3 = model_name in DA3_MODELS
+        self.load_config()
+
+        # CLI args override persisted config
+        self.model_name = model_name
+        self.use_trt = use_trt and (model_name in V2_MODELS)
+        self.is_da3 = model_name in DA3_MODELS
+
+        # Select and load backend from resolved configuration
+        if self.use_trt:
+            print("[Info] Resolving CUDA and TensorRT library paths...")
+            loaded_libs = load_cuda_libs()
+            print(f"[Info] Loaded {len(loaded_libs)} CUDA/TensorRT libraries successfully.")
+            self._load_v2_trt_model()
+        elif self.is_da3:
+            self._load_da3_model()
+        else:
+            self._load_v2_pytorch_model()
+
         self.prev_depth_gpu = None
         self.last_inference_ms = 0.0
         self.last_preprocess_ms = 0.0
         self.last_model_ms = 0.0
         self.last_postprocess_ms = 0.0
         self.last_warp_ms = 0.0
-
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"[Info] Using device: {self.device}")
-
-        # Resolve paths
-        self.script_dir = os.path.dirname(os.path.abspath(__file__))
-        self.checkpoints_dir = os.path.join(self.script_dir, "checkpoints")
-        os.makedirs(self.checkpoints_dir, exist_ok=True)
-
-        if self.use_trt:
-            print("[Info] Resolving CUDA and TensorRT library paths...")
-            loaded_libs = load_cuda_libs()
-            print(f"[Info] Loaded {len(loaded_libs)} CUDA/TensorRT libraries successfully.")
-            
-            self._load_v2_trt_model()
-        elif self.is_da3:
-            self._load_da3_model()
-        else:
-            self._load_v2_pytorch_model()
 
         self.frame_queue = queue.Queue(maxsize=60)
         self.depth_queue = queue.Queue(maxsize=60)
@@ -222,10 +230,6 @@ class SBSVideoPlayer:
         # Load config
         self.load_config()
 
-        if self.use_trt:
-            self._mean = torch.tensor([0.485, 0.456, 0.406], device=self.device, dtype=torch.float16).view(1, 3, 1, 1)
-            self._std = torch.tensor([0.229, 0.224, 0.225], device=self.device, dtype=torch.float16).view(1, 3, 1, 1)
-
     @property
     def reset_temporal(self):
         return self._reset_temporal_depth or self._reset_temporal_warp
@@ -261,9 +265,6 @@ class SBSVideoPlayer:
                 self.use_sharpen = config.get("use_sharpen", self.use_sharpen)
                 self.hq_artifact_smoothing = config.get("hq_artifact_smoothing", self.hq_artifact_smoothing)
                 self.use_frame_doubler = config.get("use_frame_doubler", self.use_frame_doubler)
-                # Ensure model matches our config
-                self.use_trt = self.model_name in V2_MODELS
-                self.is_da3 = self.model_name in DA3_MODELS
                 print("[Info] Loaded configuration from:", config_path)
             except Exception as e:
                 print("[Warning] Failed to load config:", e)
@@ -309,6 +310,19 @@ class SBSVideoPlayer:
                 self.model.half()
         self.model.eval()
         print("[Info] PyTorch Model loaded successfully.")
+
+    def _trt_dtype_to_torch(self, trt_dtype):
+        import tensorrt as trt
+        mapping = {
+            trt.float32: torch.float32,
+            trt.float16: torch.float16,
+            trt.int32:   torch.int32,
+            trt.int8:    torch.int8,
+            trt.bool:    torch.bool,
+        }
+        if trt_dtype in mapping:
+            return mapping[trt_dtype]
+        raise ValueError(f"Unsupported TRT tensor dtype: {trt_dtype}")
 
     def _load_v2_trt_model(self):
         model_short_name = self.model_name.split("/")[-1]
@@ -399,11 +413,41 @@ class SBSVideoPlayer:
         self.trt_context = self.trt_engine.create_execution_context()
         self.trt_stream = torch.cuda.Stream()
 
-        self.trt_d_input = torch.empty(1, 3, self.inference_size, self.inference_size, dtype=torch.float16, device=self.device)
-        self.trt_d_output = torch.empty(1, self.inference_size, self.inference_size, dtype=torch.float16, device=self.device)
+        # Inspect engine I/O tensor metadata and allocate matching buffers
+        import tensorrt as trt
+        num_io = self.trt_engine.num_io_tensors
+        found_input = False
+        found_output = False
 
-        self.trt_context.set_tensor_address('pixel_values', int(self.trt_d_input.data_ptr()))
-        self.trt_context.set_tensor_address('predicted_depth', int(self.trt_d_output.data_ptr()))
+        for i in range(num_io):
+            name = self.trt_engine.get_tensor_name(i)
+            mode = self.trt_engine.get_tensor_mode(name)
+            dtype = self.trt_engine.get_tensor_dtype(name)
+            shape = tuple(self.trt_engine.get_tensor_shape(name))
+            td = self._trt_dtype_to_torch(dtype)
+
+            if mode == trt.TensorIOMode.INPUT:
+                if name == 'pixel_values':
+                    found_input = True
+                    self.trt_d_input = torch.empty(shape, dtype=td, device=self.device)
+                    self.trt_context.set_tensor_address(name, int(self.trt_d_input.data_ptr()))
+            elif mode == trt.TensorIOMode.OUTPUT:
+                if name == 'predicted_depth':
+                    found_output = True
+                    self.trt_d_output = torch.empty(shape, dtype=td, device=self.device)
+                    self.trt_context.set_tensor_address(name, int(self.trt_d_output.data_ptr()))
+
+        if not found_input or not found_output:
+            raise RuntimeError(
+                f"TRT engine tensor mismatch: input={'found' if found_input else 'missing'}, "
+                f"output={'found' if found_output else 'missing'}"
+            )
+        print(f"[Info] TRT I/O buffers: input {self.trt_d_input.dtype} {list(self.trt_d_input.shape)}, "
+              f"output {self.trt_d_output.dtype} {list(self.trt_d_output.shape)}")
+
+        input_dtype = self.trt_d_input.dtype
+        self._mean = torch.tensor([0.485, 0.456, 0.406], device=self.device, dtype=input_dtype).view(1, 3, 1, 1)
+        self._std = torch.tensor([0.229, 0.224, 0.225], device=self.device, dtype=input_dtype).view(1, 3, 1, 1)
 
         print("[Info] TRT context initialized with GPU buffers.")
 
@@ -471,19 +515,38 @@ class SBSVideoPlayer:
             runtime = trt.Runtime(self.trt_logger)
             self.rife_engine = runtime.deserialize_cuda_engine(serialized)
             
-        # 3. Create context and allocate buffers
+        # 3. Create context and allocate buffers from engine metadata
         self.rife_context = self.rife_engine.create_execution_context()
         self.rife_stream = torch.cuda.Stream()
-        
-        self.rife_d_img0 = torch.empty(1, 3, self.rife_h, self.rife_w, dtype=torch.float16, device=self.device)
-        self.rife_d_img1 = torch.empty(1, 3, self.rife_h, self.rife_w, dtype=torch.float16, device=self.device)
-        self.rife_d_timestep = torch.tensor([0.5], dtype=torch.float16, device=self.device)
-        self.rife_d_output = torch.empty(1, 3, self.rife_h, self.rife_w, dtype=torch.float16, device=self.device)
-        
-        self.rife_context.set_tensor_address('img0', int(self.rife_d_img0.data_ptr()))
-        self.rife_context.set_tensor_address('img1', int(self.rife_d_img1.data_ptr()))
-        self.rife_context.set_tensor_address('timestep', int(self.rife_d_timestep.data_ptr()))
-        self.rife_context.set_tensor_address('output', int(self.rife_d_output.data_ptr()))
+
+        rife_inputs = {'img0': None, 'img1': None, 'timestep': None}
+        rife_output = None
+
+        num_io = self.rife_engine.num_io_tensors
+        for i in range(num_io):
+            name = self.rife_engine.get_tensor_name(i)
+            mode = self.rife_engine.get_tensor_mode(name)
+            if mode == trt.TensorIOMode.INPUT and name in rife_inputs:
+                dtype = self.rife_engine.get_tensor_dtype(name)
+                shape = tuple(self.rife_engine.get_tensor_shape(name))
+                td = self._trt_dtype_to_torch(dtype)
+                tensor = torch.empty(shape, dtype=td, device=self.device)
+                rife_inputs[name] = tensor
+                self.rife_context.set_tensor_address(name, int(tensor.data_ptr()))
+            elif mode == trt.TensorIOMode.OUTPUT and name == 'output':
+                dtype = self.rife_engine.get_tensor_dtype(name)
+                shape = tuple(self.rife_engine.get_tensor_shape(name))
+                td = self._trt_dtype_to_torch(dtype)
+                rife_output = torch.empty(shape, dtype=td, device=self.device)
+                self.rife_context.set_tensor_address(name, int(rife_output.data_ptr()))
+
+        if any(v is None for v in rife_inputs.values()) or rife_output is None:
+            raise RuntimeError(f"RIFE engine tensor mismatch: missing inputs or output")
+
+        self.rife_d_img0 = rife_inputs['img0']
+        self.rife_d_img1 = rife_inputs['img1']
+        self.rife_d_timestep = rife_inputs['timestep']
+        self.rife_d_output = rife_output
         
         print("[Info] RIFE TRT context initialized with GPU buffers.")
 
@@ -1089,14 +1152,18 @@ class SBSVideoPlayer:
         if self.use_frame_doubler and (not hasattr(self, 'rife_context') or self.rife_context is None):
             self._load_rife_trt_model()
 
-        reader = threading.Thread(target=self.video_reader_thread, daemon=True)
-        processor = threading.Thread(target=self.depth_inference_thread, daemon=True)
-        warper = threading.Thread(target=self.warp_thread, daemon=True)
-        audio = threading.Thread(target=self.audio_thread_func, daemon=True)
+        self._threads = []
+
+        reader = threading.Thread(target=self.video_reader_thread, daemon=False)
+        processor = threading.Thread(target=self.depth_inference_thread, daemon=False)
+        warper = threading.Thread(target=self.warp_thread, daemon=False)
+        audio = threading.Thread(target=self.audio_thread_func, daemon=False)
 
         reader.start()
         processor.start()
         warper.start()
+
+        self._threads = [reader, processor, warper]
 
         print("[Info] Priming pipeline...")
         t0 = time.time()
@@ -1107,6 +1174,7 @@ class SBSVideoPlayer:
                 break
 
         audio.start()
+        self._threads.append(audio)
         print(f"[Info] Audio started (pipeline latency: {self.pipeline_latency:.3f}s)")
 
     def run_display_loop(self):
@@ -1244,6 +1312,10 @@ class SBSVideoPlayer:
 
     def stop(self):
         self.running = False
+        if hasattr(self, '_threads'):
+            for t in self._threads:
+                t.join(timeout=2.0)
+            self._threads.clear()
         if hasattr(self, 'sd_stream') and self.sd_stream:
             try:
                 self.sd_stream.stop()
@@ -1995,9 +2067,7 @@ class SBSPlayerGUI(QMainWindow):
             self.update_playlist_ui()
 
     def load_video(self, file_path):
-        # Stop threads
-        self.player.running = False
-        time.sleep(0.5)
+        self.player.stop()
         
         # Clear stale state from previous video
         self.player.flush_queues()
@@ -2055,10 +2125,7 @@ class SBSPlayerGUI(QMainWindow):
         self.player.start_threads()
 
     def on_model_changed(self, model_name):
-        # Stop threads
-        self.player.running = False
-        time.sleep(0.5)
-        
+        self.player.stop()
         # Reload model
         self.player.model_name = model_name
         self.player.use_trt = model_name in V2_MODELS
