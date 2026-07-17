@@ -750,8 +750,15 @@ class SBSVideoPlayer:
 
             t0 = time.perf_counter()
 
-            # Pre-shrink on CPU before H2D: resize BGR to model resolution
-            small_frame = cv2.resize(frame, (self.inference_size, self.inference_size), interpolation=cv2.INTER_LINEAR)
+            # Pre-shrink on CPU before H2D: aspect-preserving resize + pad to square
+            h, w = frame.shape[:2]
+            scale = self.inference_size / max(h, w)
+            nh, nw = int(h * scale), int(w * scale)
+            small_frame = cv2.resize(frame, (nw, nh), interpolation=cv2.INTER_LINEAR)
+            pad_h = self.inference_size - nh
+            pad_w = self.inference_size - nw
+            if pad_h > 0 or pad_w > 0:
+                small_frame = cv2.copyMakeBorder(small_frame, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=(0, 0, 0))
             frame_gpu = torch.from_numpy(small_frame).to(self.device, non_blocking=True)
             frame_gpu = frame_gpu.permute(2, 0, 1).unsqueeze(0).to(dtype=self.trt_d_input.dtype)
             frame_gpu = frame_gpu.flip(1)  # BGR -> RGB
@@ -788,11 +795,12 @@ class SBSVideoPlayer:
             if depth_small.size == 0 or h == 0 or w == 0:
                 self.depth_queue.put((frame, np.zeros((h, w), dtype=np.float32), timestamp_ms, entry_time, epoch))
                 continue
-            depth_min = depth_small.min()
-            depth_max = depth_small.max()
+            # Percentile-based normalization (resists single outlier "pumping")
+            depth_min = np.percentile(depth_small, 5)
+            depth_max = np.percentile(depth_small, 95)
             diff = depth_max - depth_min
             if diff > 0:
-                depth_norm_small = np.power((depth_small - depth_min) / diff, self.depth_gamma).astype(np.float32)
+                depth_norm_small = np.clip(np.power((depth_small - depth_min) / diff, self.depth_gamma), 0, 1).astype(np.float32)
             else:
                 depth_norm_small = np.zeros((self.inference_size, self.inference_size), dtype=np.float32)
             normalized_depth = cv2.resize(depth_norm_small, (w, h), interpolation=cv2.INTER_LINEAR)
@@ -925,7 +933,8 @@ class SBSVideoPlayer:
             self.pipeline_latency = (1 - self.latency_alpha) * self.pipeline_latency + self.latency_alpha * latency
 
             if self.use_frame_doubler:
-                if self.last_sbs_frame is not None and self.last_timestamp_ms is not None:
+                should_skip_rife = (self.pipeline_latency > 1.0 / self.video_fps) if self.video_fps > 0 else False
+                if self.last_sbs_frame is not None and self.last_timestamp_ms is not None and not should_skip_rife:
                     # Intermediate frame using RIFE
                     try:
                         sbs_h, sbs_w = sbs_frame.shape[:2]
