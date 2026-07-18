@@ -1368,7 +1368,7 @@ class SBSPlayerGUI(QMainWindow):
         except Exception:
             self.nvml_initialized = False
         
-        self.auto_hide_enabled = False
+        self.auto_hide_enabled = True
         self._idle_timer = QTimer(self)
         self._idle_timer.setSingleShot(True)
         self._idle_timer.timeout.connect(self._on_idle)
@@ -1691,6 +1691,8 @@ class SBSPlayerGUI(QMainWindow):
         # Video Label
         self.video_label = QLabel()
         self.video_label.setAlignment(Qt.AlignCenter)
+        self.video_label.setMouseTracking(True)
+        self.video_label.installEventFilter(self)
         self.video_label.setStyleSheet("QLabel { background-color: #050510; border: 1px solid #1e1e3a; border-radius: 4px; }")
         self.video_label.setMinimumSize(640, 360)
 
@@ -1796,6 +1798,8 @@ class SBSPlayerGUI(QMainWindow):
         # ── Layout Assembly ──────────────────────────────────────────
         center = QWidget()
         self.setCentralWidget(center)
+        center.setMouseTracking(True)
+        center.installEventFilter(self)
         main_layout = QVBoxLayout(center)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
@@ -2337,6 +2341,11 @@ class SBSPlayerGUI(QMainWindow):
                 self._seek_setting = False
                 self._do_seek(value)
                 return True
+        if event.type() == QEvent.MouseMove:
+            if self.auto_hide_enabled and self._ui_hidden_by_idle:
+                self._show_ui()
+            if self.auto_hide_enabled and self.player.play and self.player.video_path:
+                self._idle_timer.start(1000)
         return super().eventFilter(obj, event)
 
     def keyPressEvent(self, event):
