@@ -2323,7 +2323,7 @@ class SBSPlayerGUI(QMainWindow):
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
         from PySide6.QtWidgets import QStyle, QStyleOptionSlider
-        if obj == self.seek_slider and event.type() == QEvent.MouseButtonPress:
+        if hasattr(self, 'seek_slider') and obj == self.seek_slider and event.type() == QEvent.MouseButtonPress:
             opt = QStyleOptionSlider()
             self.seek_slider.initStyleOption(opt)
             handle_pos = QStyle.sliderPositionFromValue(
