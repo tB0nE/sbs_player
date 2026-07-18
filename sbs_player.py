@@ -1393,6 +1393,13 @@ class SBSPlayerGUI(QMainWindow):
         self._config_save_timer.timeout.connect(self._do_save_config)
         self._config_dirty = False
 
+        self.auto_hide_enabled = False
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(self._on_idle)
+        self._ui_hidden_by_idle = False
+        self.setMouseTracking(True)
+
     def _do_save_config(self):
         if self._config_dirty:
             self._config_dirty = False
@@ -1673,6 +1680,11 @@ class SBSPlayerGUI(QMainWindow):
         self.doubler_checkbox.setChecked(self.player.use_frame_doubler)
         self.doubler_checkbox.stateChanged.connect(self.on_doubler_changed)
         settings_layout.addWidget(self.doubler_checkbox)
+
+        self.autohide_chk = QCheckBox("Auto-hide UI when playing")
+        self.autohide_chk.setChecked(self.auto_hide_enabled)
+        self.autohide_chk.stateChanged.connect(lambda state: setattr(self, 'auto_hide_enabled', state == 2))
+        settings_layout.addWidget(self.autohide_chk)
 
         # Right Side (Video + Playback) removed — video is now in main layout directly
 
@@ -1992,9 +2004,14 @@ class SBSPlayerGUI(QMainWindow):
         if not self.player.play:
             self.player.sys_clock_pause_time = time.time()
             self.play_button.setText("Play")
+            self._idle_timer.stop()
+            if self._ui_hidden_by_idle:
+                self._show_ui()
         else:
             self.player.sys_clock_start += time.time() - self.player.sys_clock_pause_time
             self.play_button.setText("Pause")
+            if self.auto_hide_enabled:
+                self._idle_timer.start(1000)
 
     def toggle_playlist(self):
         if self.playlist_panel.isVisible():
@@ -2141,6 +2158,8 @@ class SBSPlayerGUI(QMainWindow):
         self._seek_setting = False
         self.time_label.setText(f"{self.format_time(target)} / {self.format_time(self.player.duration_sec)}")
         self.is_seeking = False
+        if self.auto_hide_enabled:
+            self._idle_timer.start(1000)
 
     def on_seek_release(self):
         if self.is_seeking:
@@ -2266,17 +2285,36 @@ class SBSPlayerGUI(QMainWindow):
     def toggle_fullscreen(self):
         self.fullscreen_mode = not self.fullscreen_mode
         if self.fullscreen_mode:
-            self.settings_widget.hide()
-            self.playlist_panel.hide()
-            self.playback_widget.hide()
+            self._hide_ui()
             self.showFullScreen()
         else:
-            if self.settings_toggle_btn.text() == "×":
-                self.settings_widget.show()
-            if self.playlist_toggle_btn.text() == "×":
-                self.playlist_panel.show()
-            self.playback_widget.show()
+            self._show_ui()
             self.showNormal()
+
+    def mouseMoveEvent(self, event):
+        if self.auto_hide_enabled and self._ui_hidden_by_idle:
+            self._show_ui()
+        if self.auto_hide_enabled and self.player.play and self.player.video_path:
+            self._idle_timer.start(1000)
+        super().mouseMoveEvent(event)
+
+    def _on_idle(self):
+        if self.auto_hide_enabled and self.player.play and self.player.video_path:
+            self._hide_ui()
+
+    def _hide_ui(self):
+        self.playback_widget.hide()
+        self.settings_widget.hide()
+        self.playlist_panel.hide()
+        self._ui_hidden_by_idle = True
+
+    def _show_ui(self):
+        if self.settings_toggle_btn.text() == "×":
+            self.settings_widget.show()
+        if self.playlist_toggle_btn.text() == "×":
+            self.playlist_panel.show()
+        self.playback_widget.show()
+        self._ui_hidden_by_idle = False
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
