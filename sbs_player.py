@@ -1368,6 +1368,13 @@ class SBSPlayerGUI(QMainWindow):
         except Exception:
             self.nvml_initialized = False
         
+        self.auto_hide_enabled = False
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.timeout.connect(self._on_idle)
+        self._ui_hidden_by_idle = False
+        self.setMouseTracking(True)
+
         self.init_ui()
         self.update_playlist_ui()
         
@@ -1392,13 +1399,6 @@ class SBSPlayerGUI(QMainWindow):
         self._config_save_timer.setSingleShot(True)
         self._config_save_timer.timeout.connect(self._do_save_config)
         self._config_dirty = False
-
-        self.auto_hide_enabled = False
-        self._idle_timer = QTimer(self)
-        self._idle_timer.setSingleShot(True)
-        self._idle_timer.timeout.connect(self._on_idle)
-        self._ui_hidden_by_idle = False
-        self.setMouseTracking(True)
 
     def _do_save_config(self):
         if self._config_dirty:
