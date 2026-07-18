@@ -1733,6 +1733,12 @@ class SBSPlayerGUI(QMainWindow):
         self.mute_button.clicked.connect(self.toggle_mute)
         controls_layout.addWidget(self.mute_button)
 
+        self.fullscreen_btn = QPushButton("⛶")
+        self.fullscreen_btn.setObjectName("fullscreen_btn")
+        self.fullscreen_btn.setToolTip("Toggle Fullscreen (F)")
+        self.fullscreen_btn.clicked.connect(self.toggle_fullscreen)
+        controls_layout.addWidget(self.fullscreen_btn)
+
         self.volume_slider = QSlider(Qt.Horizontal)
         self.volume_slider.setObjectName("volume_slider")
         self.volume_slider.setRange(0, 100)
